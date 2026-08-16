@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 20 reached end of life on 2026-04-30. 22 is the supported floor.
+        node: ['22', '24', '26']
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Floors, not targets — see docs/engineering.md. They ratchet up, never down.
+      - name: Coverage floors
+        run: npm run test:coverage
+
+      # The MCP transport is stdout. A single stray write breaks every client, and it is the
+      # kind of regression a unit test can miss, so assert on the real process output.
+      - name: stdout carries only JSON-RPC
+        shell: bash
+        run: |
+          request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
+          output=$(printf '%s\n' "$request" | node dist/index.js 2>/dev/null)
+          echo "$output"
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            printf '%s' "$line" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const m=JSON.parse(s);if(m.jsonrpc!=="2.0")throw new Error("not JSON-RPC: "+s);})'
+          done <<< "$output"
