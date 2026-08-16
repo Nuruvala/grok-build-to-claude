@@ -9,8 +9,10 @@ import type { z } from 'zod';
 import { InvalidArgumentsError, UnknownToolError } from '../errors.js';
 import type { AnyToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { checkTool } from './handlers/check.js';
+import { grokTool } from './handlers/grok.js';
+import { helpTool } from './handlers/help.js';
 
-const TOOLS: readonly AnyToolDefinition[] = [checkTool];
+const TOOLS: readonly AnyToolDefinition[] = [checkTool, grokTool, helpTool];
 
 const BY_NAME = new Map<string, AnyToolDefinition>(TOOLS.map((tool) => [tool.name, tool]));
 

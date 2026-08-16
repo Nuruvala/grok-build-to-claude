@@ -1,13 +1,15 @@
 /**
  * `check` — readiness probe.
  *
- * M0 reports server identity and the resolved configuration, which is what a caller needs to know
- * before spending tokens on a run that the permission ceiling would reject anyway. Binary
- * resolution and the `grok version` / `grok models` probes arrive with `src/grok/binary.ts` in M1.
+ * Reports server identity, the resolved configuration, and live CLI probes
+ * (`grok version`, `grok models`). A missing or unauthenticated binary is
+ * reported as `ok: false` in the body, not as `isError` — a readiness probe
+ * that fails to report is useless.
  */
 
 import { z } from 'zod';
 
+import { probeAuth, probeVersion } from '../../grok/binary.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
 import { SERVER_NAME, VERSION } from '../../version.js';
@@ -19,7 +21,8 @@ export const checkTool = defineTool({
   title: 'Check Grok Build readiness',
   description:
     'Report grok-build-mcp-server status: version, resolved grok binary, permission ceiling, ' +
-    'and run defaults. Call this first when a grok tool behaves unexpectedly.',
+    'CLI readiness (`grok version`, `grok models`), and run defaults. Call this first when a ' +
+    'grok tool behaves unexpectedly.',
   schema: CheckInput,
   annotations: {
     readOnlyHint: true,
@@ -27,8 +30,22 @@ export const checkTool = defineTool({
     idempotentHint: true,
     openWorldHint: false,
   },
-  handler: (_input: z.output<typeof CheckInput>, ctx: ToolContext): Promise<ToolResult> => {
+  handler: async (_input: z.output<typeof CheckInput>, ctx: ToolContext): Promise<ToolResult> => {
     const { config } = ctx;
+
+    // ctx.signal is forwarded so a cancelled check does not leave two grok processes running out
+    // the probe cap. Both probes are total, so a cancellation surfaces as ok: false, not a throw.
+    const [version, auth] = await Promise.all([
+      probeVersion(config.grokBinary, config.timeoutMs, ctx.signal),
+      probeAuth(config.grokBinary, config.timeoutMs, ctx.signal),
+    ]);
+
+    const ok = version.ok && auth.ok;
+    const versionText = version.ok
+      ? (version.version ?? '(unknown)')
+      : `unavailable — ${version.problem ?? 'unknown error'}`;
+    const authText = auth.ok ? 'yes' : `no — ${auth.problem ?? 'unknown error'}`;
+    const modelsText = auth.models.length > 0 ? auth.models.join(', ') : '(none reported)';
 
     const lines = [
       `${SERVER_NAME} v${VERSION}`,
@@ -42,7 +59,10 @@ export const checkTool = defineTool({
       `state dir:          ${config.stateDir}`,
       `structuredContent:  ${config.structuredContentEnabled ? 'enabled' : 'disabled'}`,
       '',
-      'CLI probes (grok version, grok models) land in M1; this reports server config only.',
+      `ok:                 ${ok}`,
+      `grok version:       ${versionText}`,
+      `authenticated:      ${authText}`,
+      `models:             ${modelsText}`,
     ];
 
     if (config.permissionCeiling === 'read-only') {
@@ -63,6 +83,12 @@ export const checkTool = defineTool({
       defaultEffort: config.defaultEffort,
       timeoutMs: config.timeoutMs,
       stateDir: config.stateDir,
+      ok,
+      grokVersion: version.version,
+      authenticated: auth.ok,
+      models: auth.models,
+      versionProblem: version.problem,
+      authProblem: auth.problem,
     };
 
     const result: ToolResult = {
@@ -73,6 +99,6 @@ export const checkTool = defineTool({
       result.structuredContent = meta;
     }
 
-    return Promise.resolve(result);
+    return result;
   },
 });
