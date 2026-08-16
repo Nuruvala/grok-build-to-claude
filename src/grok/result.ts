@@ -50,14 +50,46 @@ export function parseGrokJson(stdout: string): ParsedGrokOutput {
   return freezeParsed({ kind: 'unparseable', reason: 'invalid JSON' });
 }
 
-function interpret(value: unknown): ParsedGrokOutput {
-  if (!isRecord(value)) {
-    return freezeParsed({ kind: 'unparseable', reason: 'expected a JSON object' });
-  }
-
+/**
+ * Read the metadata fields shared by the `json` result object and the streaming `end` event.
+ * Returns null for a non-object or a `{type:"error"}` record. `text` is taken from the record when
+ * present and is otherwise the empty string — the streaming `end` event has no `text` field, and
+ * its caller supplies the accumulated deltas.
+ */
+export function parseGrokResultObject(value: unknown): GrokRunResult | null {
+  if (!isRecord(value)) return null;
   // The CLI's failure shape. Do not try to extract a result from it — a
   // `{type:"error"}` that also happens to carry `text` / `sessionId` is still an error.
-  if (value['type'] === 'error') {
+  if (value['type'] === 'error') return null;
+  return readGrokResultFields(value);
+}
+
+/**
+ * Field reader for a record already known not to be a `{type:"error"}` envelope.
+ * The streaming path uses this so it does not re-test a condition the line interpreter
+ * has already narrowed.
+ */
+export function readGrokResultFields(record: Record<string, unknown>): GrokRunResult {
+  const textValue = record['text'];
+  return Object.freeze({
+    text: typeof textValue === 'string' ? textValue : '',
+    sessionId: stringField(record, 'sessionId'),
+    stopReason: stringField(record, 'stopReason'),
+    requestId: stringField(record, 'requestId'),
+    numTurns: numberField(record, 'num_turns'),
+    usage: parseUsage(record['usage']),
+    totalCostUsd: numberField(record, 'total_cost_usd'),
+    modelUsage: parseModelUsage(record['modelUsage']),
+  });
+}
+
+function interpret(value: unknown): ParsedGrokOutput {
+  const result = parseGrokResultObject(value);
+  if (result !== null) {
+    return freezeParsed({ kind: 'result', result });
+  }
+
+  if (isRecord(value) && value['type'] === 'error') {
     const message = value['message'];
     return freezeParsed({
       kind: 'cli-error',
@@ -65,19 +97,7 @@ function interpret(value: unknown): ParsedGrokOutput {
     });
   }
 
-  const textValue = value['text'];
-  const result: GrokRunResult = Object.freeze({
-    text: typeof textValue === 'string' ? textValue : '',
-    sessionId: stringField(value, 'sessionId'),
-    stopReason: stringField(value, 'stopReason'),
-    requestId: stringField(value, 'requestId'),
-    numTurns: numberField(value, 'num_turns'),
-    usage: parseUsage(value['usage']),
-    totalCostUsd: numberField(value, 'total_cost_usd'),
-    modelUsage: parseModelUsage(value['modelUsage']),
-  });
-
-  return freezeParsed({ kind: 'result', result });
+  return freezeParsed({ kind: 'unparseable', reason: 'expected a JSON object' });
 }
 
 function parseUsage(value: unknown): GrokUsage | null {
