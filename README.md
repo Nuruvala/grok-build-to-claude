@@ -11,9 +11,9 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M0 (scaffold) is complete: the server speaks MCP and exposes `check`. The
-> `grok`, `review`, `websearch`, `sessions`, `status`, and `stop` tools are on the way — see
-> [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M1 is complete: the server runs real headless Grok agents and reports session,
+> usage, and cost. The `review`, `websearch`, `sessions`, `status`, and `stop` tools are on the way
+> — see [ROADMAP.md](ROADMAP.md).
 
 ## Requirements
 
@@ -80,11 +80,13 @@ child process untouched.
 
 ## Tools
 
-| Tool    | Read-only | Purpose                                                                      |
-| ------- | --------- | ---------------------------------------------------------------------------- |
-| `check` | yes       | Report server version, resolved binary, permission ceiling, and run defaults |
+| Tool    | Read-only  | Purpose                                                                                         |
+| ------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `grok`  | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
+| `check` | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
+| `help`  | yes        | `grok --help` passthrough                                                                       |
 
-Everything else is still on the roadmap.
+`review`, `websearch`, `sessions`, `status`, and `stop` are still on the roadmap.
 
 ## Development
 

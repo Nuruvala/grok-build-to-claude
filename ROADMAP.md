@@ -92,6 +92,15 @@ The load-bearing milestone. Everything later is a variation on this path.
 - The returned `sessionId` is always the one the CLI reported. No test passes with a locally
   generated UUID.
 
+**Status: complete.** 300 tests passing. `check`, `grok`, and `help` are live. `grok/args.ts` and
+`permission.ts` sit at 100% line, branch, and function coverage; the suite as a whole is 95.8% /
+87.5% / 91.6% against floors of 90 / 85 / 80.
+
+Verified end to end against grok 1.0.0 (3cd0d0cbce) on 2026-08-16: a prompt through the built server
+returned text, `usage` including `reasoning_tokens`, and `total_cost_usd`, and the reported session
+id was present in `grok sessions list` — the plugin failure where a run reports an id that does not
+resume.
+
 ---
 
 ## M2 — Progress streaming
