@@ -13,7 +13,7 @@
     "cli"
   ],
   "license": "MIT",
-  "author": "Jorge Montero",
+  "author": "Jorge Montero Varela",
   "type": "module",
   "bin": {
     "grok-build-mcp-server": "dist/index.js"
