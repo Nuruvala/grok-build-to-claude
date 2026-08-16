@@ -13,31 +13,11 @@ import { z } from 'zod';
 import { InvalidArgumentsError } from '../../errors.js';
 import { buildGrokArgs } from '../../grok/args.js';
 import type { SessionSelector } from '../../grok/args.js';
-import { execGrok } from '../../grok/exec.js';
-import type { ExecResult } from '../../grok/exec.js';
-import { createProgressMapper } from '../../grok/progress.js';
-import type { ProgressEmission } from '../../grok/progress.js';
-import { parseGrokJson } from '../../grok/result.js';
-import type { GrokRunResult, ParsedGrokOutput } from '../../grok/result.js';
-import {
-  createNdjsonReader,
-  createStreamCollector,
-  interpretStreamLine,
-} from '../../grok/stream.js';
-import type { StreamOutcome } from '../../grok/stream.js';
+import { withPromptDelivery } from '../../grok/prompt-file.js';
 import { requestedPermissionLevel, resolvePermission } from '../../permission.js';
-import type { PermissionLevel } from '../../permission.js';
 import { defineTool } from '../../types.js';
-import type { ProgressUpdate, ToolContext, ToolResult } from '../../types.js';
-
-const UNPARSEABLE_PREVIEW_CHARS = 4_000;
-
-/**
- * Token-level `text`/`thought` deltas arrive far faster than a client can usefully render.
- * A trailing-edge debounce coalesces them; a polling interval would tick through a
- * twenty-minute tool call that is sitting still.
- */
-const NARRATION_DEBOUNCE_MS = 100;
+import type { ToolContext, ToolResult } from '../../types.js';
+import { runGrok } from '../run.js';
 
 const PermissionLevelSchema = z.enum(['read-only', 'write', 'full']);
 
@@ -185,275 +165,36 @@ export const grokTool = defineTool({
     const model = input.model ?? ctx.config.defaultModel;
     const effort = input.effort ?? ctx.config.defaultEffort;
 
-    const args = buildGrokArgs({
-      prompt: input.prompt,
-      outputFormat: ctx.progressRequested ? 'streaming-json' : 'json',
-      permission: permission.flags,
-      cwd: input.cwd,
-      model,
-      effort,
-      maxTurns: input.maxTurns,
-      tools: input.tools,
-      disallowedTools: input.disallowedTools,
-      allow: input.allow,
-      deny: input.deny,
-      rules: input.rules,
-      agent: input.agent,
-      session,
-      disableWebSearch: input.disableWebSearch,
-    });
-
-    const stream = ctx.progressRequested ? startStreamSession(ctx.reportProgress) : undefined;
-
-    let exec: ExecResult;
-    try {
-      exec = await execGrok({
-        binary: ctx.config.grokBinary,
-        args,
-        timeoutMs: ctx.config.timeoutMs,
-        signal: ctx.signal,
-        ...(stream === undefined ? {} : { onStdout: stream.onStdout }),
-      });
-      stream?.drain();
-    } finally {
-      // A stray timer keeps the event loop alive after the run finishes. unref()
-      // would hide the leak instead of fixing it.
-      stream?.clearTimer();
-    }
-
-    if (exec.outcome === 'spawn-failed') {
-      return errorResult(
-        `Failed to start grok at "${ctx.config.grokBinary}".\n\n` +
-          'Install the grok CLI or set GROK_BINARY to its path.',
-        exec,
-      );
-    }
-
-    const outcome =
-      stream === undefined ? parsedToStreamOutcome(parseGrokJson(exec.stdout)) : stream.outcome();
-
-    if (exec.outcome === 'timeout') {
-      return errorResult(
-        `The grok run timed out after ${Math.round(exec.durationMs)} ms.\n\n` +
-          'Set GROK_MCP_TIMEOUT_MS to a higher value if the run needs more time.\n' +
-          buffered(exec, streamedStdout(stream, outcome, exec)),
-        exec,
-      );
-    }
-
-    if (exec.outcome === 'aborted') {
-      return errorResult(
-        `The grok run was cancelled by the client.\n${buffered(exec, streamedStdout(stream, outcome, exec))}`.trimEnd(),
-        exec,
-      );
-    }
-
-    // `--max-turns` exits 1 with a complete result on stdout (verified grok 1.0.0,
-    // 2026-08-16). The parsed result wins over the exit code so we keep the
-    // session id and the spend that produced it.
-    if (outcome.kind === 'result') {
-      return successResult(
-        outcome.result,
-        exec,
-        model,
-        permission.level,
-        ctx.config.structuredContentEnabled,
-      );
-    }
-
-    if (outcome.kind === 'cli-error') {
-      const message = outcome.message === '' ? '(no message)' : outcome.message;
-      return errorResult(`grok reported an error: ${message}\n${buffered(exec)}`.trimEnd(), exec);
-    }
-
-    if (outcome.kind === 'partial') {
-      return {
-        content: [
-          {
-            type: 'text',
-            text:
-              `${outcome.result.text}\n\n` +
-              '[stream ended before its end event, so session id, usage, and cost are unavailable]',
-            _meta: {
-              outcome: exec.outcome,
-              durationMs: exec.durationMs,
-              exitCode: exec.code,
-              // No sessionId, usage, or cost: the `end` event that would have carried them never
-              // arrived. Everything here is something we knew before the run started, so
-              // reporting it invents nothing.
-              model,
-              permissionLevel: permission.level,
-            },
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    if (exec.code !== 0) {
-      return errorResult(
-        `grok exited with code ${exec.code ?? 'unknown'}.\n${buffered(exec)}`,
-        exec,
-      );
-    }
-
-    return errorResult(
-      `grok returned output that is not valid JSON (${outcome.reason}).\n\n` + preview(exec.stdout),
-      exec,
+    // A caller can pass a prompt of any size — a pasted file, a transcript. Past the argv
+    // per-argument limit it goes to a file instead of failing the spawn with E2BIG.
+    return withPromptDelivery(input.prompt, (delivery) =>
+      runGrok(
+        {
+          args: buildGrokArgs({
+            ...delivery,
+            outputFormat: ctx.progressRequested ? 'streaming-json' : 'json',
+            permission: permission.flags,
+            cwd: input.cwd,
+            model,
+            effort,
+            maxTurns: input.maxTurns,
+            tools: input.tools,
+            disallowedTools: input.disallowedTools,
+            allow: input.allow,
+            deny: input.deny,
+            rules: input.rules,
+            agent: input.agent,
+            session,
+            disableWebSearch: input.disableWebSearch,
+          }),
+          model,
+          permissionLevel: permission.level,
+        },
+        ctx,
+      ),
     );
   },
 });
-
-interface StreamSession {
-  readonly onStdout: (chunk: string) => void;
-  readonly drain: () => void;
-  readonly outcome: () => StreamOutcome;
-  readonly clearTimer: () => void;
-}
-
-function startStreamSession(reportProgress: (update: ProgressUpdate) => void): StreamSession {
-  const reader = createNdjsonReader();
-  const collector = createStreamCollector();
-  const mapper = createProgressMapper();
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function emit(emission: ProgressEmission | null): void {
-    if (emission === null) return;
-    reportProgress({ progress: emission.progress, message: emission.message });
-  }
-
-  function cancelDebounce(): void {
-    if (debounceTimer === undefined) return;
-    clearTimeout(debounceTimer);
-    debounceTimer = undefined;
-  }
-
-  function handleLine(line: string): void {
-    const event = interpretStreamLine(line);
-    collector.accept(event);
-
-    const narration = event.type === 'text' || event.type === 'thought';
-    if (!narration) {
-      // Narration buffered before this event happened before it, so flush it first. Ordering is
-      // the whole point: a real run ended with `finished: end_turn` arriving ahead of the model's
-      // last words, because the pending tail was only flushed after the stream drained. Flushing
-      // before `accept` also keeps the progress counter monotonic — `accept` numbers its emission
-      // as soon as it is called, so a flush afterwards would carry the higher number and arrive
-      // second.
-      cancelDebounce();
-      emit(mapper.flush());
-    }
-
-    emit(mapper.accept(event));
-
-    if (narration && debounceTimer === undefined) {
-      debounceTimer = setTimeout(() => {
-        debounceTimer = undefined;
-        emit(mapper.flush());
-      }, NARRATION_DEBOUNCE_MS);
-    }
-  }
-
-  return {
-    onStdout: (chunk) => {
-      for (const line of reader.push(chunk)) {
-        handleLine(line);
-      }
-    },
-    drain: () => {
-      for (const line of reader.flush()) {
-        handleLine(line);
-      }
-      emit(mapper.flush());
-    },
-    outcome: () => collector.outcome(),
-    clearTimer: cancelDebounce,
-  };
-}
-
-function parsedToStreamOutcome(parsed: ParsedGrokOutput): StreamOutcome {
-  switch (parsed.kind) {
-    case 'result':
-      return { kind: 'result', result: parsed.result };
-    case 'cli-error':
-      return { kind: 'cli-error', message: parsed.message };
-    case 'unparseable':
-      return { kind: 'unparseable', reason: parsed.reason };
-    default: {
-      const unreachable: never = parsed;
-      throw new Error(`unhandled parse kind: ${String(unreachable)}`);
-    }
-  }
-}
-
-/**
- * What to show as "stdout" in a timeout or abort message.
- *
- * On the streaming path the raw buffer is hundreds of NDJSON lines — unreadable, and it buries the
- * output it contains — so the recovered text is shown instead. When nothing was recovered there is
- * still a run to diagnose, and stderr is empty on a streaming run, so fall back to a bounded
- * preview of the raw buffer rather than reporting a failure with no evidence at all.
- */
-function streamedStdout(
-  stream: StreamSession | undefined,
-  outcome: StreamOutcome,
-  exec: ExecResult,
-): string | undefined {
-  if (stream === undefined) return undefined;
-  if (outcome.kind === 'result' || outcome.kind === 'partial') {
-    if (outcome.result.text !== '') return outcome.result.text;
-  }
-  return preview(exec.stdout);
-}
-
-function successResult(
-  result: GrokRunResult,
-  exec: ExecResult,
-  model: string | null,
-  permissionLevel: PermissionLevel,
-  structuredContentEnabled: boolean,
-): ToolResult {
-  const meta = Object.freeze({
-    // Exactly the id the CLI reported. Never a locally generated stand-in,
-    // and never the `--session-id` we may have passed for a new session.
-    sessionId: result.sessionId,
-    // The id we passed as `--model`, not the `modelUsage` key (`grok-4.6` vs `grok-4.6-build`).
-    model,
-    usage: result.usage,
-    total_cost_usd: result.totalCostUsd,
-    stopReason: result.stopReason,
-    numTurns: result.numTurns,
-    permissionLevel,
-    durationMs: exec.durationMs,
-    exitCode: exec.code,
-  });
-
-  const toolResult: ToolResult = {
-    content: [
-      {
-        type: 'text',
-        text: formatResultText(result.text, exec.code, result.stopReason),
-        _meta: meta,
-      },
-    ],
-  };
-
-  if (structuredContentEnabled) {
-    toolResult.structuredContent = meta;
-  }
-
-  return toolResult;
-}
-
-function formatResultText(
-  text: string,
-  exitCode: number | null,
-  stopReason: string | null,
-): string {
-  if (exitCode === 0 || exitCode === null) return text;
-  const reasonBit = stopReason === null ? '' : ` (stopReason: ${stopReason})`;
-  return `${text}\n\n[grok exited with code ${exitCode}${reasonBit}]`;
-}
 
 function sessionConflicts(input: GrokInput): string[] {
   const issues: string[] = [];
@@ -496,33 +237,4 @@ function sessionSelector(input: GrokInput): SessionSelector {
     return { kind: 'new-with-id', id: input.sessionId };
   }
   return { kind: 'new' };
-}
-
-function errorResult(text: string, exec: ExecResult): ToolResult {
-  return {
-    content: [
-      {
-        type: 'text',
-        text,
-        _meta: {
-          outcome: exec.outcome,
-          durationMs: exec.durationMs,
-        },
-      },
-    ],
-    isError: true,
-  };
-}
-
-function buffered(exec: ExecResult, stdoutOverride?: string): string {
-  const stdout = stdoutOverride ?? exec.stdout;
-  const parts: string[] = [];
-  if (stdout !== '') parts.push('', 'stdout:', stdout);
-  if (exec.stderr !== '') parts.push('', 'stderr:', exec.stderr);
-  return parts.join('\n');
-}
-
-function preview(stdout: string): string {
-  if (stdout.length <= UNPARSEABLE_PREVIEW_CHARS) return stdout;
-  return `${stdout.slice(0, UNPARSEABLE_PREVIEW_CHARS)}\n[truncated]`;
 }

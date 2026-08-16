@@ -22,8 +22,19 @@ export type SessionSelector =
     }
   | { readonly kind: 'continue'; readonly forkId?: string | undefined };
 
-export interface GrokRunParams {
-  readonly prompt: string;
+/**
+ * How the prompt reaches the child: inline as `-p`, or via `--prompt-file`.
+ *
+ * A union rather than two optional fields, so passing both is a compile error. Which one a
+ * caller wants is a size question — see `INLINE_PROMPT_MAX_BYTES` in prompt-file.ts.
+ */
+export type PromptDelivery =
+  | { readonly prompt: string; readonly promptFile?: undefined }
+  | { readonly prompt?: undefined; readonly promptFile: string };
+
+export type GrokRunParams = PromptDelivery & GrokRunOptions;
+
+export interface GrokRunOptions {
   readonly outputFormat: GrokOutputFormat;
   readonly permission: GrokPermissionFlags;
   readonly cwd?: string | undefined;
@@ -46,15 +57,17 @@ export interface GrokRunParams {
  * Build the argv for a headless `grok` run. Pure; the caller spawns it.
  *
  * Deterministic order, so tests can assert on the whole array:
- * `-p`, `--output-format`, `--cwd`, `--model`, `--effort`, `--permission-mode`, `--sandbox`,
+ * `-p` (or `--prompt-file`), `--output-format`, `--cwd`, `--model`, `--effort`,
+ * `--permission-mode`, `--sandbox`,
  * `--always-approve`, `--max-turns`, `--tools`, `--disallowed-tools`, `--allow` (repeated),
  * `--deny` (repeated), `--rules`, `--agent`, `--json-schema`, session flags,
  * `--disable-web-search`.
  */
 export function buildGrokArgs(params: GrokRunParams): readonly string[] {
   return Object.freeze([
-    '-p',
-    params.prompt,
+    ...(params.promptFile === undefined
+      ? ['-p', params.prompt]
+      : ['--prompt-file', params.promptFile]),
     '--output-format',
     params.outputFormat,
     ...flag('--cwd', params.cwd),

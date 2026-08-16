@@ -2,17 +2,27 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { buildGrokArgs } from '../../src/grok/args.js';
-import type { GrokRunParams, SessionSelector } from '../../src/grok/args.js';
+import type {
+  GrokRunOptions,
+  GrokRunParams,
+  PromptDelivery,
+  SessionSelector,
+} from '../../src/grok/args.js';
 import { PERMISSION_LEVELS, permissionFlags } from '../../src/permission.js';
 import type { PermissionLevel } from '../../src/permission.js';
 
-function minimal(overrides: Partial<GrokRunParams> = {}): GrokRunParams {
-  return {
-    prompt: 'hello',
-    outputFormat: 'json',
-    permission: permissionFlags('read-only'),
-    ...overrides,
-  };
+/**
+ * Overrides are typed against the options half only. The prompt half is a union — inline `-p`
+ * or `--prompt-file`, never both — and `Partial` of a union collapses it into a shape that
+ * permits exactly the pair the union exists to forbid.
+ */
+function minimal(overrides: Partial<GrokRunOptions> & Partial<PromptDelivery> = {}): GrokRunParams {
+  const { prompt, promptFile, ...options } = overrides;
+  const base = { outputFormat: 'json', permission: permissionFlags('read-only') } as const;
+  if (promptFile !== undefined) {
+    return { promptFile, ...base, ...options };
+  }
+  return { prompt: prompt ?? 'hello', ...base, ...options };
 }
 
 function assertAdjacent(argv: readonly string[], flag: string, value: string): void {

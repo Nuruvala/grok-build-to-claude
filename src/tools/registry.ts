@@ -11,8 +11,9 @@ import type { AnyToolDefinition, ToolContext, ToolResult } from '../types.js';
 import { checkTool } from './handlers/check.js';
 import { grokTool } from './handlers/grok.js';
 import { helpTool } from './handlers/help.js';
+import { reviewTool } from './handlers/review.js';
 
-const TOOLS: readonly AnyToolDefinition[] = [checkTool, grokTool, helpTool];
+const TOOLS: readonly AnyToolDefinition[] = [checkTool, grokTool, reviewTool, helpTool];
 
 const BY_NAME = new Map<string, AnyToolDefinition>(TOOLS.map((tool) => [tool.name, tool]));
 
