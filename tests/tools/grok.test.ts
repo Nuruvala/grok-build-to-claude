@@ -291,6 +291,7 @@ describe('grok result metadata', () => {
     assert.equal(textOf(result), 'hello from grok');
     assert.equal(metaOf(result)['sessionId'], REPORTED_SESSION);
     assert.notEqual(metaOf(result)['sessionId'], PASSED_SESSION);
+    assert.equal(metaOf(result)['resumeCommand'], `grok -r ${REPORTED_SESSION}`);
   });
 
   it('reports sessionId as null when the CLI omitted one, rather than substituting the --session-id we passed', async () => {
@@ -303,6 +304,20 @@ describe('grok result metadata', () => {
 
     assert.notEqual(result.isError, true);
     assert.equal(metaOf(result)['sessionId'], null);
+    assert.equal(metaOf(result)['resumeCommand'], undefined);
+  });
+
+  it('omits resumeCommand when the CLI reported an empty session id, so we do not imply a session that does not exist', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      {
+        FAKE_GROK_STDOUT: JSON.stringify({ text: 'ok', stopReason: 'end_turn', sessionId: '' }),
+      },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.equal(metaOf(result)['sessionId'], '');
+    assert.equal(metaOf(result)['resumeCommand'], undefined);
   });
 
   it('puts the model id we passed on _meta, not the modelUsage key the CLI reports', async () => {
@@ -657,6 +672,7 @@ describe('grok streaming outcomes', () => {
     assert.match(textOf(result), /recovered so far/);
     assert.match(textOf(result), /stream ended before its end event/);
     assert.equal(metaOf(result)['sessionId'], undefined);
+    assert.equal(metaOf(result)['resumeCommand'], undefined);
   });
 
   it('surfaces a stream whose only content is an error event as the CLI error path', async () => {
@@ -665,6 +681,70 @@ describe('grok streaming outcomes', () => {
     assert.equal(result.isError, true);
     assert.match(textOf(result), /grok reported an error: model not found/);
     assert.equal(metaOf(result)['sessionId'], undefined);
+  });
+});
+
+describe('grok result text marks a cut-off even when the process exits 0', () => {
+  it('leaves exit 0 with stopReason end_turn unmarked, because that run finished', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      { FAKE_GROK_STDOUT: JSON.stringify({ text: 'done', stopReason: 'end_turn' }) },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.equal(textOf(result), 'done');
+    assert.doesNotMatch(textOf(result), /stopped early/);
+    assert.doesNotMatch(textOf(result), /exited with code/);
+  });
+
+  it('appends a stopped-early note on exit 0 with stopReason cancelled, because a permission-cancelled run looks finished otherwise', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      {
+        FAKE_GROK_STDOUT: JSON.stringify({
+          text: "I'll start by reading",
+          stopReason: 'cancelled',
+          sessionId: REPORTED_SESSION,
+        }),
+      },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.equal(
+      textOf(result),
+      "I'll start by reading\n\n[the run stopped early — stopReason: cancelled]",
+    );
+  });
+
+  it('keeps the existing non-zero-exit note, including when stopReason is also present', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      {
+        FAKE_GROK_STDOUT: JSON.stringify({
+          text: 'partial',
+          stopReason: 'cancelled',
+          sessionId: REPORTED_SESSION,
+        }),
+        FAKE_GROK_EXIT_CODE: '1',
+      },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.equal(textOf(result), 'partial\n\n[grok exited with code 1 (stopReason: cancelled)]');
+    assert.doesNotMatch(textOf(result), /stopped early/);
+  });
+
+  it('keeps a non-zero-exit note without inventing a stopReason when the CLI omitted one', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      {
+        FAKE_GROK_STDOUT: JSON.stringify({ text: 'partial', sessionId: REPORTED_SESSION }),
+        FAKE_GROK_EXIT_CODE: '1',
+      },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.equal(textOf(result), 'partial\n\n[grok exited with code 1]');
   });
 });
 

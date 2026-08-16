@@ -17,6 +17,7 @@ import type { GrokRunResult, ParsedGrokOutput } from '../grok/result.js';
 import { createNdjsonReader, createStreamCollector, interpretStreamLine } from '../grok/stream.js';
 import type { StreamOutcome } from '../grok/stream.js';
 import type { PermissionLevel } from '../permission.js';
+import { resumeCommand } from '../sessions/select.js';
 import type { ProgressUpdate, ToolContext, ToolResult } from '../types.js';
 
 const UNPARSEABLE_PREVIEW_CHARS = 4_000;
@@ -267,6 +268,11 @@ function successResult(
     // Exactly the id the CLI reported. Never a locally generated stand-in,
     // and never the `--session-id` we may have passed for a new session.
     sessionId: result.sessionId,
+    // Only when the CLI confirmed an id. Omitting the key (not emitting null)
+    // keeps the partial-stream path honest: no session we did not see.
+    ...(nonEmptySessionId(result.sessionId)
+      ? { resumeCommand: resumeCommand(result.sessionId) }
+      : {}),
     // The id we passed as `--model`, not the `modelUsage` key (`grok-4.6` vs `grok-4.6-build`).
     model: request.model,
     usage: result.usage,
@@ -296,6 +302,10 @@ function successResult(
   return toolResult;
 }
 
+function nonEmptySessionId(sessionId: string | null): sessionId is string {
+  return sessionId !== null && sessionId !== '';
+}
+
 function resolveMeta(
   meta: GrokRunMeta | undefined,
   result: GrokRunResult,
@@ -310,9 +320,17 @@ function formatResultText(
   exitCode: number | null,
   stopReason: string | null,
 ): string {
-  if (exitCode === 0 || exitCode === null) return text;
-  const reasonBit = stopReason === null ? '' : ` (stopReason: ${stopReason})`;
-  return `${text}\n\n[grok exited with code ${exitCode}${reasonBit}]`;
+  const failed = exitCode !== 0 && exitCode !== null;
+  const cutOff = stopReason !== null && stopReason !== 'end_turn';
+  if (!failed && !cutOff) return text;
+  if (failed) {
+    // One line carries both facts when a non-zero exit is also a cut-off.
+    const reasonBit = stopReason === null ? '' : ` (stopReason: ${stopReason})`;
+    return `${text}\n\n[grok exited with code ${exitCode}${reasonBit}]`;
+  }
+  // Exit 0 with a non-end_turn stopReason: a permission-cancelled run does
+  // this. Without a note the caller sees bare narration and no fragment mark.
+  return `${text}\n\n[the run stopped early — stopReason: ${stopReason}]`;
 }
 
 function errorResult(text: string, exec: ExecResult): ToolResult {

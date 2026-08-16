@@ -36,6 +36,16 @@ import type { GrokRunMeta } from '../run.js';
 const REVIEW_DIFF_BYTE_CAP = 256 * 1024;
 
 /**
+ * Tools a reviewer must not use. Plan mode looks like it already forbids
+ * these, but in headless mode a permission *prompt* is fatal: the CLI records
+ * `permission_cancelled` and exits 0, and the model never gets to recover.
+ * An explicit `--deny` is recoverable — the model sees a policy refusal and
+ * continues. Verified against grok 1.0.4 on 2026-08-17. Do not "simplify"
+ * this away because plan + read-only sandbox already appear to cover it.
+ */
+const REVIEW_DENY_RULES: readonly string[] = Object.freeze(['Bash(*)', 'Edit(*)', 'Write(*)']);
+
+/**
  * Ceiling on paths listed in `_meta.files`.
  *
  * `_meta` lands in the caller's context window. A wide branch diff can touch four figures of
@@ -171,17 +181,20 @@ export const reviewTool = defineTool({
             model,
             effort,
             maxTurns: input.maxTurns,
+            deny: REVIEW_DENY_RULES,
             jsonSchema: structured ? REVIEW_FINDINGS_SCHEMA : undefined,
           }),
           model,
           permissionLevel: 'read-only',
-          meta: structured ? structuredReviewMeta(baseMeta, input.maxTurns) : baseMeta,
-          ...(structured
-            ? {
-                formatText: (result) => formatStructuredReviewText(result, input.maxTurns),
-                isError: (result) => structuredReviewIsError(result, input.maxTurns),
-              }
-            : {}),
+          meta: structured
+            ? structuredReviewMeta(baseMeta, input.maxTurns)
+            : proseReviewMeta(baseMeta, input.maxTurns),
+          formatText: structured
+            ? (result) => formatStructuredReviewText(result, input.maxTurns)
+            : (result) => formatProseReviewText(result, input.maxTurns),
+          isError: structured
+            ? (result) => structuredReviewIsError(result, input.maxTurns)
+            : (result) => isCutOff(result.stopReason),
         },
         ctx,
       ),
@@ -260,10 +273,16 @@ function classifyStructuredReview(
     case 'final':
       return { kind: 'final', findings: extraction.findings };
     case 'working':
-      return { kind: 'incomplete', explanation: incompleteReviewExplanation(result, maxTurns) };
+      return {
+        kind: 'incomplete',
+        explanation: incompleteReviewExplanation(result, maxTurns, STRUCTURED_CUT_OFF_CLAUSE),
+      };
     case 'invalid':
       if (isCutOff(result.stopReason)) {
-        return { kind: 'incomplete', explanation: incompleteReviewExplanation(result, maxTurns) };
+        return {
+          kind: 'incomplete',
+          explanation: incompleteReviewExplanation(result, maxTurns, STRUCTURED_CUT_OFF_CLAUSE),
+        };
       }
       return {
         kind: 'malformed',
@@ -327,6 +346,40 @@ function structuredReviewIsError(result: GrokRunResult, maxTurns: number | undef
   return classifyStructuredReview(result, maxTurns).kind === 'incomplete';
 }
 
+/**
+ * Cut-off clause for structured mode. Kept as a named constant so the
+ * explanation stays byte-identical to the wording the structured tests pin.
+ */
+const STRUCTURED_CUT_OFF_CLAUSE =
+  'before emitting its final findings, so nothing below is a completed review.';
+
+/**
+ * Cut-off clause for prose mode. Same shared prefix/suffix as structured, but
+ * no mention of findings objects — those were never requested.
+ */
+const PROSE_CUT_OFF_CLAUSE =
+  'before producing a completed review, so nothing below is a finished review.';
+
+function proseReviewMeta(
+  base: Readonly<Record<string, unknown>>,
+  maxTurns: number | undefined,
+): GrokRunMeta {
+  return (result) => {
+    if (!isCutOff(result.stopReason)) return base;
+    return {
+      ...base,
+      // `findingsComplete` is a structured-mode key. Inventing it here would
+      // claim a findings object was requested.
+      reviewIncomplete: incompleteReviewExplanation(result, maxTurns, PROSE_CUT_OFF_CLAUSE),
+    };
+  };
+}
+
+function formatProseReviewText(result: GrokRunResult, maxTurns: number | undefined): string {
+  if (!isCutOff(result.stopReason)) return result.text;
+  return `${incompleteReviewExplanation(result, maxTurns, PROSE_CUT_OFF_CLAUSE)}\n\n${result.text}`;
+}
+
 /** Surface the CLI's own reason so a caller does not have to parse our prose. */
 function structuredOutputErrorMeta(result: GrokRunResult): Readonly<Record<string, unknown>> {
   return result.structuredOutputError === null
@@ -342,7 +395,17 @@ function isCutOff(stopReason: string | null): boolean {
   return stopReason !== null && stopReason !== 'end_turn';
 }
 
-function incompleteReviewExplanation(result: GrokRunResult, maxTurns: number | undefined): string {
+/**
+ * Shared cut-off / incomplete diagnosis. `cutOffClause` is the mode-specific
+ * middle so prose mode does not talk about findings objects. The finished-
+ * normally branch is structured-only (a prose `end_turn` is a completed
+ * review) and keeps its previous wording byte-identical.
+ */
+function incompleteReviewExplanation(
+  result: GrokRunResult,
+  maxTurns: number | undefined,
+  cutOffClause: string,
+): string {
   const stopReason = result.stopReason ?? 'unknown';
   const turns = result.numTurns === null ? '' : ` after ${String(result.numTurns)} turns`;
   const cliReported = structuredOutputErrorSentence(result.structuredOutputError);
@@ -350,13 +413,13 @@ function incompleteReviewExplanation(result: GrokRunResult, maxTurns: number | u
     if (maxTurns !== undefined) {
       return (
         `The run stopped with stopReason "${stopReason}"${turns} (maxTurns ${String(maxTurns)}) ` +
-        `before emitting its final findings, so nothing below is a completed review.${cliReported} ` +
+        `${cutOffClause}${cliReported} ` +
         `Raise maxTurns above ${String(maxTurns)} or narrow the review target.`
       );
     }
     return (
-      `The run stopped with stopReason "${stopReason}"${turns} before emitting its final findings, ` +
-      `so nothing below is a completed review.${cliReported} ` +
+      `The run stopped with stopReason "${stopReason}"${turns} ${cutOffClause}` +
+      `${cliReported} ` +
       'No maxTurns limit was set, so the turn budget was not the cause. ' +
       'Narrow the review target and retry.'
     );

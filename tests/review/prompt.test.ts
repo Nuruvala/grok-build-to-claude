@@ -136,6 +136,32 @@ describe('buildReviewPrompt', () => {
     const prompt = buildReviewPrompt(params());
     assert.match(prompt, /do not rediscover/i);
   });
+
+  it('tells the reviewer it has no shell, before the mode-specific instructions, in both modes', () => {
+    const sentence =
+      'You have no shell and no ability to edit files in this run: `run_terminal_command` and the edit tools are denied. Review the diff above, reading files for context if you need them, and answer without them.';
+
+    for (const structured of [false, true]) {
+      const prompt = buildReviewPrompt(params({ structured }));
+      const sentenceAt = prompt.indexOf(sentence);
+      const fenceClose = prompt.indexOf('\n```', prompt.indexOf('```diff'));
+      assert.ok(
+        sentenceAt !== -1,
+        `expected the no-shell sentence in structured=${String(structured)}`,
+      );
+      assert.ok(fenceClose !== -1);
+      assert.ok(
+        sentenceAt > fenceClose,
+        'the sentence refers to the diff above, so it follows the fence',
+      );
+
+      const modeAt = structured
+        ? prompt.indexOf('Every message you emit must be a single JSON object')
+        : prompt.indexOf('grouped by severity');
+      assert.ok(modeAt !== -1);
+      assert.ok(sentenceAt < modeAt, 'the shared sentence must precede mode-specific instructions');
+    }
+  });
 });
 
 describe('buildReviewPrompt fences a diff that contains backticks', () => {

@@ -212,6 +212,21 @@ function flagValue(argv: unknown, flag: string): string | undefined {
   return recorded[at + 1];
 }
 
+function denyRules(argv: unknown): string[] {
+  const recorded = recordedArgv(argv);
+  const rules: string[] = [];
+  for (let i = 0; i < recorded.length; i += 1) {
+    if (recorded[i] !== '--deny') continue;
+    const rule = recorded[i + 1];
+    assert.ok(typeof rule === 'string');
+    rules.push(rule);
+  }
+  return rules;
+}
+
+const REVIEW_DENY_RULES = ['Bash(*)', 'Edit(*)', 'Write(*)'] as const;
+const EARLY_STOP_NOTE = '[the run stopped early — stopReason: cancelled]';
+
 describe('review target conflicts are rejected before spawn', () => {
   const cases: readonly { name: string; input: Record<string, unknown> }[] = [
     { name: 'base and commit', input: { base: 'main', commit: 'abc1234' } },
@@ -393,6 +408,35 @@ describe('review is always read-only', { skip: skipGit }, () => {
       assert.equal(metaOf(result)['permissionLevel'], 'read-only');
     });
   });
+
+  it('denies Bash(*), Edit(*), and Write(*) on the prose path, because a permission prompt in headless mode kills the run', async () => {
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result, argvFile } = await runReview({ cwd: repo.cwd, uncommitted: true });
+
+      assert.notEqual(result.isError, true);
+      assert.deepEqual(denyRules(await readArgv(argvFile)), [...REVIEW_DENY_RULES]);
+    });
+  });
+
+  it('denies Bash(*), Edit(*), and Write(*) on the structured path too', async () => {
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result, argvFile } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true },
+        { FAKE_GROK_STDOUT: STRUCTURED_JSON },
+      );
+
+      assert.notEqual(result.isError, true);
+      assert.deepEqual(denyRules(await readArgv(argvFile)), [...REVIEW_DENY_RULES]);
+    });
+  });
 });
 
 describe('review structured findings', { skip: skipGit }, () => {
@@ -536,7 +580,7 @@ describe('review structured findings', { skip: skipGit }, () => {
       const split = body.indexOf('\n\n');
       assert.ok(split !== -1);
       assert.equal(body.slice(0, split), incomplete);
-      assert.equal(body.slice(split + 2), raw);
+      assert.equal(body.slice(split + 2), `${raw}\n\n${EARLY_STOP_NOTE}`);
     });
   });
 
@@ -574,7 +618,7 @@ describe('review structured findings', { skip: skipGit }, () => {
       const split = body.indexOf('\n\n');
       assert.ok(split !== -1);
       assert.equal(body.slice(0, split), incomplete);
-      assert.equal(body.slice(split + 2), raw);
+      assert.equal(body.slice(split + 2), `${raw}\n\n${EARLY_STOP_NOTE}`);
     });
   });
 
@@ -618,7 +662,7 @@ describe('review structured findings', { skip: skipGit }, () => {
       const split = body.indexOf('\n\n');
       assert.ok(split !== -1);
       assert.equal(body.slice(0, split), incomplete);
-      assert.equal(body.slice(split + 2), raw);
+      assert.equal(body.slice(split + 2), `${raw}\n\n${EARLY_STOP_NOTE}`);
     });
   });
 
@@ -797,7 +841,7 @@ describe('review explains why structured findings are missing', { skip: skipGit 
       const split = body.indexOf('\n\n');
       assert.ok(split !== -1, 'the diagnosis must precede the raw narration');
       assert.equal(body.slice(0, split), incomplete);
-      assert.equal(body.slice(split + 2), raw);
+      assert.equal(body.slice(split + 2), `${raw}\n\n${EARLY_STOP_NOTE}`);
     });
   });
 
@@ -829,6 +873,60 @@ describe('review explains why structured findings are missing', { skip: skipGit 
       assert.ok(split !== -1);
       assert.match(body.slice(0, split), /cannot validate/);
       assert.equal(body.slice(split + 2), raw);
+    });
+  });
+});
+
+describe('review prose path treats a cut-off as an error', { skip: skipGit }, () => {
+  it('returns isError with the explanation before the text and reviewIncomplete in _meta, without findingsComplete', async () => {
+    const raw = "I'll start by reading the full review request…";
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            stopReason: 'cancelled',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 3,
+            total_cost_usd: 0.001,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(metaOf(result)['findingsComplete'], undefined);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /stopReason "cancelled"/);
+      assert.match(incomplete, /after 3 turns/);
+      assert.match(incomplete, /turn budget was not the cause/);
+      assert.doesNotMatch(incomplete, /findings/);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1, 'explanation must precede the narration');
+      assert.equal(body.slice(0, split), incomplete);
+      assert.ok(body.slice(split + 2).startsWith(raw));
+    });
+  });
+
+  it('leaves a normal end_turn prose review as success with no reviewIncomplete key', async () => {
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview({ cwd: repo.cwd, uncommitted: true });
+
+      assert.equal(result.isError, false);
+      assert.equal(textOf(result), 'looks fine');
+      assert.equal(metaOf(result)['reviewIncomplete'], undefined);
+      assert.equal(metaOf(result)['findingsComplete'], undefined);
     });
   });
 });

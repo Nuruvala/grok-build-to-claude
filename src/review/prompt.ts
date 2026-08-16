@@ -31,6 +31,10 @@ export function buildReviewPrompt(params: ReviewPromptParams): string {
 
   parts.push(
     `${fence}diff\n${params.diff}\n${fence}`,
+    // Shared, before the mode-specific instructions. Constraining the prompt
+    // is what stops the model reaching for a denied tool; the deny rules
+    // alone still leave it hunting for a few turns (see M3a).
+    'You have no shell and no ability to edit files in this run: `run_terminal_command` and the edit tools are denied. Review the diff above, reading files for context if you need them, and answer without them.',
     params.structured ? structuredInstructions() : proseInstructions(),
   );
 
