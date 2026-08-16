@@ -4,10 +4,9 @@
  * Three ordered levels. The operator sets a ceiling once, at registration; individual calls select
  * a level at or below it. A call above the ceiling is rejected, never clamped — see
  * {@link PermissionDeniedError} for why.
- *
- * Resolving a *request* against the ceiling lands in M1 alongside the `grok` tool. This module
- * defines the levels themselves, which config validation already needs.
  */
+
+import { PermissionDeniedError } from './errors.js';
 
 export const PERMISSION_LEVELS = ['read-only', 'write', 'full'] as const;
 
@@ -55,4 +54,72 @@ export function isWithinCeiling(requested: PermissionLevel, ceiling: PermissionL
 
 export function permissionFlags(level: PermissionLevel): GrokPermissionFlags {
   return FLAGS[level];
+}
+
+/** What a tool call asked for, before the ceiling is applied. */
+export interface PermissionRequest {
+  /** Explicit level from the caller, or undefined when the call asked for nothing. */
+  readonly requested: PermissionLevel | undefined;
+  /** Server default, applied when `requested` is undefined. */
+  readonly defaultLevel: PermissionLevel;
+  /** Operator-set maximum. */
+  readonly ceiling: PermissionLevel;
+}
+
+export interface ResolvedPermission {
+  readonly level: PermissionLevel;
+  readonly flags: GrokPermissionFlags;
+  /** True when the level came from `defaultLevel` rather than an explicit request. */
+  readonly fromDefault: boolean;
+}
+
+/**
+ * Resolve a request against the ceiling.
+ *
+ * @throws {PermissionDeniedError} when an EXPLICIT request exceeds the ceiling. Never clamps.
+ */
+export function resolvePermission(request: PermissionRequest): ResolvedPermission {
+  // A call that asked for nothing must not throw: config already guarantees default ≤ ceiling,
+  // and rejecting here would break the unattended path (ceiling=full, default=full, no args).
+  if (request.requested === undefined) {
+    return {
+      level: request.defaultLevel,
+      flags: permissionFlags(request.defaultLevel),
+      fromDefault: true,
+    };
+  }
+
+  if (!isWithinCeiling(request.requested, request.ceiling)) {
+    throw new PermissionDeniedError(request.requested, request.ceiling);
+  }
+
+  return {
+    level: request.requested,
+    flags: permissionFlags(request.requested),
+    fromDefault: false,
+  };
+}
+
+/**
+ * Map the tool-argument shorthands to a level. `permission` wins over the booleans.
+ * Returns undefined when the caller expressed no preference.
+ * `yolo: true` means `full`; `write: true` means `write`. `false` is not a request for a lower
+ * level — it is the absence of a request, because a JSON schema default of false is
+ * indistinguishable from an omitted field.
+ */
+export function requestedPermissionLevel(input: {
+  readonly permission?: PermissionLevel | undefined;
+  readonly write?: boolean | undefined;
+  readonly yolo?: boolean | undefined;
+}): PermissionLevel | undefined {
+  if (input.permission !== undefined) {
+    return input.permission;
+  }
+  if (input.yolo === true) {
+    return 'full';
+  }
+  if (input.write === true) {
+    return 'write';
+  }
+  return undefined;
 }
