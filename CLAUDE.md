@@ -158,6 +158,32 @@ Three facts, all verified with a two-field schema on 2026-08-16:
   `--output-format streaming-json` wins over the implication: the run streamed 78 NDJSON lines and
   still produced `structuredOutput` on `end`. Only an _unset_ output format is forced to `json`.
 
+Four more, measured on 2026-08-16 while building the `review` tool's structured mode. These are the
+ones that decide whether structured output is safe to ship:
+
+- **Constrained by a findings-shaped schema, the model narrates its own progress as findings.** It
+  has no other channel: every message must satisfy the schema, so "I am reading X" comes out shaped
+  like a defect report. A `--max-turns 4` review produced four entries of `severity: "info"`,
+  `file: <whatever it was reading>`,
+  `summary: "Reading the review support modules the new handler calls…"`, all under
+  `verdict: "placeholder"`. Nothing in the object marks it as narration. **Give the schema a
+  required `status: "working" | "final"` discriminator and tell the model how to use it.** The same
+  cut-off run then emitted only `{"status":"working","findings":[]}` — zero fabricated findings —
+  and an uncompleted run became detectable instead of merely unlucky. Without a discriminator there
+  is no way to tell a real finding from the model thinking out loud, which is why "recover the last
+  object from the concatenation" is not just inelegant but unsafe.
+- **The `end` event carries `structuredOutputError` when `structuredOutput` is missing**, and omits
+  it otherwise. Observed value: `"model did not produce structured output"`. Read it instead of
+  inferring a cause from the stop reason.
+- **`stopReason: "cancelled"` does not imply a turn cap.** Captured with no `--max-turns` flag at
+  all, empty stderr, and no `max_turns_reached` event: the CLI aborts the run when the model stops
+  conforming to the schema. Only blame the turn budget when the caller actually set one — otherwise
+  the advice sends them to spend more money on the same failure.
+- **Completion is stochastic and tracks target size.** The same commit, same flags, same schema
+  reached `end_turn` at 9, 15, and 17 turns and cancelled at 6, 8, and 11 across six runs. A larger
+  target failed more often. Structured output is best-effort; the degradation path is not a corner
+  case to be tidied up later, it is a path that runs regularly.
+
 ### Models and effort
 
 `grok models` on this account lists exactly two: `grok-4.6` (default) and `grok-4.5`. Our defaults
@@ -215,6 +241,21 @@ through and let the CLI reject unknown ids.
 
 `--sandbox read-only` blocks child-process network on Linux (seccomp); it is a no-op on macOS. Do
 not describe it as a network guarantee in cross-platform docs.
+
+Three traps in the tool-list flags, all verified on 1.0.4 on 2026-08-16:
+
+- **`--tools ''` is a no-op, not "no tools".** An empty list is ignored, and the run keeps its full
+  toolset — verified by asking a run with `--tools ''` to read a file, which it did. There is no
+  spelling that removes every tool.
+- **`--tools <id>` really does restrict**, but `search_tool` and `use_tool` survive it. A run given
+  `--tools todo_write` reported exactly `search_tool`, `use_tool`, and `todo_write`.
+- **Unknown ids are accepted in silence.** `--disallowed-tools not_a_real_tool` exits 0 and blocks
+  nothing. A typo'd id disables nothing and reports nothing, so a deny list cannot be trusted
+  without a positive test.
+
+Taking away a tool the task needs does not make the model answer from what it already has — it makes
+it hunt. Asked to read a file with no file-reading tool, a run spent three turns looking for one and
+then cancelled. Constrain the prompt, not the toolset, when the goal is fewer turns.
 
 **The two `disallowed` spellings are different flags.** `--disallowedTools` is a compat _alias for
 `--deny`_ and takes one `ToolPrefix(glob)` rule; `--disallowed-tools` takes a comma-separated list

@@ -131,9 +131,24 @@ which it chose rather than guessing silently.
 never what was wanted.
 
 Pass `structured: true` for machine-readable findings (`severity`, `file`, `line`, `summary`,
-`rationale`) on `_meta.findings`. If the model's output cannot be read as findings, the call still
-succeeds and returns the prose plus a `_meta.parseError` explaining why — a degraded review beats a
-failed one.
+`rationale`) on `_meta.findings`, validated before you see them.
+
+Two different things can go wrong, and they are reported differently rather than blurred together:
+
+- **The run never finished** — it was cut off, or ended without producing its findings. There is no
+  review, so the call is `isError: true` and `_meta.findingsComplete` is `false`. The body leads
+  with why, quoting the CLI's own reason, and names the fix that fits the actual cause.
+- **The run finished but its output will not validate.** The call still succeeds, returning the raw
+  text plus a `_meta.parseError` — a degraded review beats a failed one.
+
+What you will never get is a plausible-looking finding that the model made up. `--json-schema`
+constrains every message the model emits, so while it is still reading it has no way to say "I am
+working" except in the shape of a finding — and left unchecked it does exactly that. The schema
+carries a required `status` field to keep that narration out of your results, and nothing is ever
+salvaged from a partial response by pattern-matching.
+
+Structured reviews of large targets do fail this way with some regularity. The failure is loud by
+design.
 
 ## Development
 

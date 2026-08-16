@@ -209,12 +209,69 @@ Four bugs the fixtures could not have caught, all found by running the real bina
 
 The first two of those were found by `review` reviewing its own diff.
 
-**Known behaviour, not yet addressed:** `--json-schema` constrains _every_ assistant message, so a
-review that takes several turns emits one JSON object per turn and `text` is their concatenation —
-not valid JSON. Only a run reaching `end` carries `structuredOutput`. The degradation path is
-correct (raw text, `parseError`, `isError: false`) and the message now names the stop reason, but a
-multi-turn structured review still returns prose rather than findings. Constraining the reviewer's
-tools so it answers from the embedded diff is the likely fix; it needs its own verification pass.
+### M3a — structured review, closed
+
+The multi-turn `--json-schema` behaviour left open above is resolved. **524 tests.** The fix is not
+the one predicted there: constraining the reviewer's tools was verified and rejected, because a run
+stripped of the tool it needs hunts for it rather than answering from what it has — three wasted
+turns and a cancel.
+
+What the verification pass actually found was worse than the reported symptom. Forced to satisfy a
+findings-shaped schema on every message, the model narrates its own progress _as findings_. A
+cut-off review produced four entries of `severity: "info"` reading
+`"Reading the review support modules the new handler calls…"` under `verdict: "placeholder"` —
+fabricated defects, structurally identical to real ones. The open item described a review that
+returns prose instead of findings; the real risk was a review that returns invented findings and
+looks complete.
+
+- **`status: "working" | "final"` is now required by the schema**, and the prompt tells the model to
+  emit `{"status":"working","findings":[]}` while it reads and `"final"` exactly once at the end.
+  Re-running the same cut-off scenario produced only working placeholders — zero fabricated findings
+  — and an unfinished review became detectable rather than merely unlucky.
+- **The concatenation is never mined.** `findings.ts` reads `structuredOutput`, or parses `text` as
+  one whole JSON value, and nothing else. Decoding a whitespace-separated sequence and taking the
+  last object is now explicitly forbidden in the module doc, with the reason: those objects are
+  narration.
+- **Findings are validated with zod before they reach `_meta`**, and the JSON Schema string handed
+  to `--json-schema` is derived from that zod schema via `z.toJSONSchema` rather than hand-kept
+  beside it — the same rule the tool inputs already follow.
+- **`structuredOutputError` is plumbed through and reported.** The CLI states its own reason
+  (`"model did not produce structured output"`); we no longer infer one.
+- **A cut-off review is `isError: true`**, with the diagnosis ahead of the raw text. Malformed model
+  output stays `isError: false` and degrades to prose, as documented. "No review happened" and "a
+  review happened but will not parse" are different answers and now read differently.
+- **`maxTurns` is only blamed when the caller set it.** `stopReason: "cancelled"` arrives with no
+  `--max-turns` flag and an empty stderr, so the old advice to raise it was wrong in the case it
+  fired most.
+
+Also fixed here: `collectDiff` built a `context` string — branch, commit subject, base-range log,
+and the `[only the first 100 untracked files were included]` cap notice — that the handler never
+passed to the prompt. A working tree with more than 100 untracked files was reviewed as if it were
+complete.
+
+Two of these were found by `review` reviewing its own diff: the `working`-after-`end_turn`
+misdiagnosis (which told the caller to raise a limit that was never the cause) and the duplicated
+schema.
+
+**Left open, deliberately.** Structured completion is stochastic and tracks target size: the same
+commit under the same flags reached `end_turn` at 9, 15, and 17 turns and cancelled at 6, 8, and 11
+across six runs. The degradation path is therefore a regular path, not a corner case. Making large
+structured reviews reliable — chunking the diff, or retrying a cancelled run once — is real work and
+has not been attempted.
+
+**Recorded, not fixed** — four findings `review` raised against M3's own `git.ts`, none of them
+regressions from this change:
+
+- `git diff --name-only` C-quotes non-ASCII paths while `git ls-files -z` does not, so `_meta.files`
+  can mix quoted and unquoted names for the same review.
+- The untracked cap counts files, not bytes, so a hundred large untracked files still blow past any
+  sensible review budget.
+- `git` is spawned in the server's own process group and killed by child pid, so a grandchild
+  survives the timeout kill.
+- A buffer-capped `git` fragment is reported to the model with a truncation marker but not to the
+  caller. Investigated and **downgraded**: the git cap is 10 MB against a 256 KB review cap, so
+  anything reaching it is truncated again by `truncateDiff` and `diffTruncated: true` is reported
+  either way. Worth tidying, not a shippable bug.
 
 ---
 
