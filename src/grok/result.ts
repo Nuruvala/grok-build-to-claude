@@ -22,6 +22,12 @@ export interface GrokRunResult {
   readonly modelUsage: Readonly<Record<string, unknown>> | null;
   /** Present only when the run passed `--json-schema`. Already decoded by the CLI, never a string to re-parse. */
   readonly structuredOutput: unknown;
+  /**
+   * Present on a `--json-schema` run when the model never produced a matching object.
+   * Absent on success. Verified grok 1.0.4, 2026-08-16: arrives on the streaming `end`
+   * event (and may also appear on the non-streaming `json` object).
+   */
+  readonly structuredOutputError: string | null;
 }
 
 export type ParsedGrokOutput =
@@ -85,6 +91,7 @@ export function readGrokResultFields(record: Record<string, unknown>): GrokRunRe
     // Already-decoded by the CLI (verified grok 1.0.4, 2026-08-16). Pass through
     // as-is; parsing `text` to recover this is the scrape this field exists to avoid.
     structuredOutput: record['structuredOutput'] ?? null,
+    structuredOutputError: stringField(record, 'structuredOutputError'),
   });
 }
 

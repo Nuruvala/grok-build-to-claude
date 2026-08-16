@@ -16,8 +16,10 @@ import { permissionFlags } from '../../permission.js';
 import { truncateDiff } from '../../review/diff.js';
 import type { TruncatedDiff } from '../../review/diff.js';
 import { extractFindings } from '../../review/findings.js';
+import type { ReviewFindings } from '../../review/findings.js';
 import { collectDiff, collectRepoFacts } from '../../review/git.js';
-import { REVIEW_FINDINGS_SCHEMA, buildReviewPrompt } from '../../review/prompt.js';
+import { buildReviewPrompt } from '../../review/prompt.js';
+import { REVIEW_FINDINGS_SCHEMA } from '../../review/schema.js';
 import {
   autoSelectTarget,
   describeTarget,
@@ -76,7 +78,7 @@ const ReviewInput = z
       .boolean()
       .optional()
       .describe(
-        'Return machine-readable findings via `--json-schema`. Malformed model JSON degrades to raw text plus a parseError field rather than failing the call. `false` is not a request.',
+        'Return machine-readable findings via `--json-schema`. A run that stops before a final findings object fails the call with reviewIncomplete. Malformed model JSON after a normal stop degrades to raw text plus a parseError field rather than failing the call. `false` is not a request.',
       ),
     model: z
       .string()
@@ -142,6 +144,7 @@ export const reviewTool = defineTool({
       truncationNotice: truncationNotice(truncated),
       instructions: input.instructions,
       structured,
+      context: collection.context,
     });
 
     const model = input.model ?? ctx.config.defaultModel;
@@ -172,8 +175,13 @@ export const reviewTool = defineTool({
           }),
           model,
           permissionLevel: 'read-only',
-          meta: structured ? structuredReviewMeta(baseMeta) : baseMeta,
-          ...(structured ? { formatText: formatStructuredReviewText } : {}),
+          meta: structured ? structuredReviewMeta(baseMeta, input.maxTurns) : baseMeta,
+          ...(structured
+            ? {
+                formatText: (result) => formatStructuredReviewText(result, input.maxTurns),
+                isError: (result) => structuredReviewIsError(result, input.maxTurns),
+              }
+            : {}),
         },
         ctx,
       ),
@@ -229,42 +237,147 @@ function fileMeta(files: readonly string[]): Readonly<Record<string, unknown>> {
   };
 }
 
-function structuredReviewMeta(base: Readonly<Record<string, unknown>>): GrokRunMeta {
-  return (result) => {
-    const extraction = extractFindings(result.structuredOutput, result.text);
-    if (extraction.kind === 'structured') {
-      return { ...base, findings: extraction.findings };
+/**
+ * The handler, unlike findings.ts, knows `stopReason`, so it can tell "still
+ * working / cut off" from "finished but unreadable".
+ *
+ * `--json-schema` constrains every assistant message (verified grok 1.0.4,
+ * 2026-08-16). A cut-off run therefore ends on a `working` object, or on
+ * concatenated per-turn JSON that does not parse as one value. Neither is a
+ * review.
+ */
+type StructuredReviewClass =
+  | { readonly kind: 'final'; readonly findings: ReviewFindings }
+  | { readonly kind: 'incomplete'; readonly explanation: string }
+  | { readonly kind: 'malformed'; readonly parseError: string; readonly explanation: string };
+
+function classifyStructuredReview(
+  result: GrokRunResult,
+  maxTurns: number | undefined,
+): StructuredReviewClass {
+  const extraction = extractFindings(result.structuredOutput, result.text);
+  switch (extraction.kind) {
+    case 'final':
+      return { kind: 'final', findings: extraction.findings };
+    case 'working':
+      return { kind: 'incomplete', explanation: incompleteReviewExplanation(result, maxTurns) };
+    case 'invalid':
+      if (isCutOff(result.stopReason)) {
+        return { kind: 'incomplete', explanation: incompleteReviewExplanation(result, maxTurns) };
+      }
+      return {
+        kind: 'malformed',
+        parseError: extraction.parseError,
+        explanation: malformedReviewExplanation(extraction.parseError),
+      };
+    default: {
+      const unreachable: never = extraction;
+      throw new Error(`unhandled findings extraction: ${String(unreachable)}`);
     }
-    return { ...base, parseError: explainParseError(extraction.parseError, result) };
+  }
+}
+
+function structuredReviewMeta(
+  base: Readonly<Record<string, unknown>>,
+  maxTurns: number | undefined,
+): GrokRunMeta {
+  return (result) => {
+    const classified = classifyStructuredReview(result, maxTurns);
+    switch (classified.kind) {
+      case 'final':
+        return { ...base, findings: classified.findings, findingsComplete: true };
+      case 'incomplete':
+        return {
+          ...base,
+          findingsComplete: false,
+          reviewIncomplete: classified.explanation,
+          ...structuredOutputErrorMeta(result),
+        };
+      case 'malformed':
+        return {
+          ...base,
+          findingsComplete: false,
+          parseError: classified.parseError,
+          ...structuredOutputErrorMeta(result),
+        };
+      default: {
+        const unreachable: never = classified;
+        throw new Error(`unhandled structured review class: ${String(unreachable)}`);
+      }
+    }
   };
 }
 
+function formatStructuredReviewText(result: GrokRunResult, maxTurns: number | undefined): string {
+  const classified = classifyStructuredReview(result, maxTurns);
+  switch (classified.kind) {
+    case 'final':
+      return JSON.stringify(classified.findings, null, 2);
+    case 'incomplete':
+    case 'malformed':
+      return `${classified.explanation}\n\n${result.text}`;
+    default: {
+      const unreachable: never = classified;
+      throw new Error(`unhandled structured review class: ${String(unreachable)}`);
+    }
+  }
+}
+
+function structuredReviewIsError(result: GrokRunResult, maxTurns: number | undefined): boolean {
+  return classifyStructuredReview(result, maxTurns).kind === 'incomplete';
+}
+
+/** Surface the CLI's own reason so a caller does not have to parse our prose. */
+function structuredOutputErrorMeta(result: GrokRunResult): Readonly<Record<string, unknown>> {
+  return result.structuredOutputError === null
+    ? {}
+    : { structuredOutputError: result.structuredOutputError };
+}
+
 /**
- * Why the structured findings could not be read.
- *
- * `--json-schema` constrains every assistant message, so a run that took several turns emits one
- * JSON object per turn and `text` is their concatenation — invalid JSON, through no fault of the
- * model. Only a run that reaches `end` carries `structuredOutput`. Reporting a bare
- * "invalid JSON" sends the reader looking for a malformed model response when what actually
- * happened is that the run stopped early, so name the stop reason and the fix.
+ * `null` is a normal finish: the CLI omitted the field, it did not abort.
+ * Anything other than `end_turn` (max-turns, cancel, timeout) is a cut-off.
  */
-function explainParseError(parseError: string, result: GrokRunResult): string {
-  if (result.stopReason === null || result.stopReason === 'end_turn') {
-    return parseError;
+function isCutOff(stopReason: string | null): boolean {
+  return stopReason !== null && stopReason !== 'end_turn';
+}
+
+function incompleteReviewExplanation(result: GrokRunResult, maxTurns: number | undefined): string {
+  const stopReason = result.stopReason ?? 'unknown';
+  const turns = result.numTurns === null ? '' : ` after ${String(result.numTurns)} turns`;
+  const cliReported = structuredOutputErrorSentence(result.structuredOutputError);
+  if (isCutOff(result.stopReason)) {
+    if (maxTurns !== undefined) {
+      return (
+        `The run stopped with stopReason "${stopReason}"${turns} (maxTurns ${String(maxTurns)}) ` +
+        `before emitting its final findings, so nothing below is a completed review.${cliReported} ` +
+        `Raise maxTurns above ${String(maxTurns)} or narrow the review target.`
+      );
+    }
+    return (
+      `The run stopped with stopReason "${stopReason}"${turns} before emitting its final findings, ` +
+      `so nothing below is a completed review.${cliReported} ` +
+      'No maxTurns limit was set, so the turn budget was not the cause. ' +
+      'Narrow the review target and retry.'
+    );
   }
   return (
-    `${parseError} (the run stopped with stopReason "${result.stopReason}", so it never produced ` +
-    'structuredOutput; the text below is the per-turn output concatenated). ' +
-    'Narrow the review target or raise maxTurns.'
+    `The run finished normally (stopReason "${stopReason}"${turns}) but the model never emitted ` +
+    `its final findings object, so nothing below is a completed review.${cliReported} Retry the review; ` +
+    'raising maxTurns will not help.'
   );
 }
 
-function formatStructuredReviewText(result: GrokRunResult): string {
-  const extraction = extractFindings(result.structuredOutput, result.text);
-  if (extraction.kind === 'structured') {
-    return JSON.stringify(extraction.findings, null, 2);
-  }
-  return extraction.text;
+function structuredOutputErrorSentence(error: string | null): string {
+  if (error === null) return '';
+  return ` The CLI reported: ${JSON.stringify(error)}.`;
+}
+
+function malformedReviewExplanation(parseError: string): string {
+  return (
+    `The model produced output we cannot validate (${parseError}). ` +
+    'The text below is the raw response.'
+  );
 }
 
 function truncationNotice(truncated: TruncatedDiff): string | null {

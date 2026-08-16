@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { describe, it } from 'node:test';
 
-import { REVIEW_FINDINGS_SCHEMA, buildReviewPrompt } from '../../src/review/prompt.js';
+import { buildReviewPrompt } from '../../src/review/prompt.js';
 import type { ReviewPromptParams } from '../../src/review/prompt.js';
+import { REVIEW_FINDINGS_SCHEMA } from '../../src/review/schema.js';
 
 function params(overrides: Partial<ReviewPromptParams> = {}): ReviewPromptParams {
   return {
@@ -14,50 +15,6 @@ function params(overrides: Partial<ReviewPromptParams> = {}): ReviewPromptParams
     ...overrides,
   };
 }
-
-function asRecord(value: unknown): Record<string, unknown> {
-  assert.equal(typeof value, 'object');
-  assert.ok(value !== null);
-  assert.ok(!Array.isArray(value));
-  return value as Record<string, unknown>;
-}
-
-describe('REVIEW_FINDINGS_SCHEMA', () => {
-  it('parses as JSON and declares the required findings object plus an optional verdict', () => {
-    const schema = asRecord(JSON.parse(REVIEW_FINDINGS_SCHEMA));
-    assert.equal(schema['type'], 'object');
-    assert.deepEqual(schema['required'], ['findings']);
-
-    const properties = asRecord(schema['properties']);
-    assert.ok('findings' in properties);
-    assert.ok('verdict' in properties);
-    assert.equal(asRecord(properties['verdict'])['type'], 'string');
-
-    const findings = asRecord(properties['findings']);
-    assert.equal(findings['type'], 'array');
-    const items = asRecord(findings['items']);
-    assert.deepEqual(items['required'], ['severity', 'file', 'summary', 'rationale']);
-
-    const itemProperties = asRecord(items['properties']);
-    assert.deepEqual(asRecord(itemProperties['severity'])['enum'], [
-      'critical',
-      'high',
-      'medium',
-      'low',
-      'info',
-    ]);
-    assert.equal(asRecord(itemProperties['file'])['type'], 'string');
-    assert.equal(asRecord(itemProperties['summary'])['type'], 'string');
-    assert.equal(asRecord(itemProperties['rationale'])['type'], 'string');
-    assert.equal(asRecord(itemProperties['line'])['type'], 'integer');
-    const itemRequired = items['required'];
-    assert.ok(Array.isArray(itemRequired));
-    assert.ok(!itemRequired.includes('line'));
-    const schemaRequired = schema['required'];
-    assert.ok(Array.isArray(schemaRequired));
-    assert.ok(!schemaRequired.includes('verdict'));
-  });
-});
 
 describe('buildReviewPrompt', () => {
   it('is deterministic: identical params produce byte-identical output', () => {
@@ -94,11 +51,46 @@ describe('buildReviewPrompt', () => {
     assert.ok(!prompt.includes(REVIEW_FINDINGS_SCHEMA));
   });
 
-  it('instructs the model to answer with JSON matching the schema and nothing else when structured is true', () => {
+  it('states the working/final status contract when structured is true', () => {
     const prompt = buildReviewPrompt(params({ structured: true }));
-    assert.match(prompt, /JSON object matching the following schema/);
+    assert.match(
+      prompt,
+      /Every message you emit must be a single JSON object matching the schema below/,
+    );
     assert.match(prompt, /nothing else/);
+    assert.match(prompt, /Do not wrap it in a markdown fence/);
+    assert.match(prompt, /\{"status":"working","findings":\[\]\}/);
+    assert.match(prompt, /Never describe your own progress as a finding/);
+    assert.match(prompt, /"status":"final"/);
+    assert.match(prompt, /exactly once/);
     assert.ok(prompt.includes(REVIEW_FINDINGS_SCHEMA));
+  });
+
+  it('does not mention the working/final status contract in prose mode', () => {
+    const prompt = buildReviewPrompt(params({ structured: false }));
+    assert.match(prompt, /grouped by severity/);
+    assert.doesNotMatch(prompt, /"status":"working"/);
+    assert.doesNotMatch(prompt, /"status":"final"/);
+    assert.ok(!prompt.includes(REVIEW_FINDINGS_SCHEMA));
+  });
+
+  it('renders a context block immediately before the diff fence when context is present', () => {
+    const context = 'main\n[only the first 100 untracked files were included]';
+    const prompt = buildReviewPrompt(params({ context }));
+    assert.match(prompt, /Context for this target:/);
+    assert.ok(prompt.includes(context));
+    const contextAt = prompt.indexOf('Context for this target:');
+    const fenceAt = prompt.indexOf('```diff');
+    assert.ok(contextAt !== -1 && fenceAt !== -1);
+    assert.ok(contextAt < fenceAt, 'context must precede the diff fence');
+  });
+
+  it('omits the context block when context is absent, empty, or whitespace-only', () => {
+    const heading = 'Context for this target:';
+    assert.ok(!buildReviewPrompt(params()).includes(heading));
+    assert.ok(!buildReviewPrompt(params({ context: '' })).includes(heading));
+    assert.ok(!buildReviewPrompt(params({ context: '   \n\t  ' })).includes(heading));
+    assert.ok(!buildReviewPrompt(params({ context: undefined })).includes(heading));
   });
 
   it('appends caller instructions verbatim under a clear heading when they are present', () => {

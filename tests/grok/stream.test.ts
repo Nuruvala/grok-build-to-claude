@@ -346,6 +346,7 @@ describe('interpretStreamLine degradation', () => {
       totalCostUsd: null,
       modelUsage: null,
       structuredOutput: null,
+      structuredOutputError: null,
     });
   });
 });
@@ -402,6 +403,31 @@ describe('createStreamCollector folding', () => {
 
     assert.deepEqual(fromStream.structuredOutput, structuredOutput);
     assert.deepEqual(fromJson.structuredOutput, structuredOutput);
+    assert.deepEqual(fromStream, fromJson);
+  });
+
+  it('carries structuredOutputError from the streaming end event through the shared field reader, matching parseGrokJson', () => {
+    const structuredOutputError = 'model did not produce structured output';
+    const text = 'working';
+    const record = { text, ...END_METADATA, stopReason: 'cancelled', structuredOutputError };
+    const fromJson = assertParsedResult(parseGrokJson(JSON.stringify(record)));
+
+    const collector = createStreamCollector();
+    collector.accept(interpretStreamLine(JSON.stringify({ type: 'text', data: 'working' })));
+    collector.accept(
+      interpretStreamLine(
+        JSON.stringify({
+          type: 'end',
+          ...END_METADATA,
+          stopReason: 'cancelled',
+          structuredOutputError,
+        }),
+      ),
+    );
+    const fromStream = assertResultOutcome(collector.outcome());
+
+    assert.equal(fromStream.structuredOutputError, structuredOutputError);
+    assert.equal(fromJson.structuredOutputError, structuredOutputError);
     assert.deepEqual(fromStream, fromJson);
   });
 

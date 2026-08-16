@@ -40,6 +40,8 @@ export interface GrokRunRequest {
   readonly meta?: GrokRunMeta | undefined;
   /** Transform the model's text before it becomes the result body. Identity when omitted. */
   readonly formatText?: ((result: GrokRunResult) => string) | undefined;
+  /** Decide the error flag from the parsed result. Defaults to a successful run being `isError: false`. */
+  readonly isError?: ((result: GrokRunResult) => boolean) | undefined;
 }
 
 export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promise<ToolResult> {
@@ -284,7 +286,7 @@ function successResult(
         _meta: meta,
       },
     ],
-    isError: false,
+    isError: request.isError === undefined ? false : request.isError(result),
   };
 
   if (structuredContentEnabled) {

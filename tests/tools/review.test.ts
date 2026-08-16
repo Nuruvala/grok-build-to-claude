@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig } from '../../src/config.js';
 import type { Config } from '../../src/config.js';
 import { InvalidArgumentsError } from '../../src/errors.js';
-import { REVIEW_FINDINGS_SCHEMA } from '../../src/review/prompt.js';
+import { REVIEW_FINDINGS_SCHEMA } from '../../src/review/schema.js';
 import { reviewTool } from '../../src/tools/handlers/review.js';
 import { invokeTool } from '../../src/tools/registry.js';
 import { runGrok } from '../../src/tools/run.js';
@@ -47,6 +47,7 @@ const skipGit = gitOnPath()
 const REPORTED_SESSION = '7c3e91a2-4b18-6fa0-9d21-e8bb0c4d2a71';
 
 const FINDINGS = {
+  status: 'final',
   findings: [
     {
       severity: 'high',
@@ -57,6 +58,11 @@ const FINDINGS = {
     },
   ],
   verdict: 'needs work',
+} as const;
+
+const WORKING = {
+  status: 'working',
+  findings: [] as const,
 } as const;
 
 const SUCCESS_JSON = JSON.stringify({
@@ -406,6 +412,10 @@ describe('review structured findings', { skip: skipGit }, () => {
       assert.equal(flagValue(argv, '--json-schema'), REVIEW_FINDINGS_SCHEMA);
       assert.equal(flagValue(argv, '--output-format'), 'json');
       assert.deepEqual(metaOf(result)['findings'], FINDINGS);
+      assert.equal(metaOf(result)['findingsComplete'], true);
+      assert.equal(metaOf(result)['reviewIncomplete'], undefined);
+      assert.equal(metaOf(result)['parseError'], undefined);
+      assert.equal(result.isError, false);
       assert.equal(textOf(result), JSON.stringify(FINDINGS, null, 2));
     });
   });
@@ -450,10 +460,11 @@ describe('review structured findings', { skip: skipGit }, () => {
       assert.equal(flagValue(argv, '--output-format'), 'streaming-json');
       assert.equal(flagValue(argv, '--json-schema'), REVIEW_FINDINGS_SCHEMA);
       assert.deepEqual(metaOf(result)['findings'], FINDINGS);
+      assert.equal(metaOf(result)['findingsComplete'], true);
     });
   });
 
-  it('yields _meta.parseError, isError false, and the raw text when structured output cannot be parsed', async () => {
+  it('yields _meta.parseError, isError false, and the explanation before the raw text when structured output cannot be parsed after a normal stop', async () => {
     const raw = 'this is a prose review, not json';
     await withGitRepo(async (repo) => {
       await repo.write('tracked.txt', 'committed\n');
@@ -475,9 +486,209 @@ describe('review structured findings', { skip: skipGit }, () => {
       );
 
       assert.equal(result.isError, false);
-      assert.equal(textOf(result), raw);
-      assert.match(String(metaOf(result)['parseError']), /invalid JSON/);
+      assert.equal(metaOf(result)['findingsComplete'], false);
+      assert.equal(metaOf(result)['parseError'], 'invalid JSON');
+      assert.equal(metaOf(result)['reviewIncomplete'], undefined);
       assert.equal(metaOf(result)['findings'], undefined);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1, 'explanation must be separated from the raw text by a blank line');
+      assert.match(body.slice(0, split), /cannot validate/);
+      assert.match(body.slice(0, split), /invalid JSON/);
+      assert.equal(body.slice(split + 2), raw);
+    });
+  });
+
+  it('treats a working-status object as an incomplete review, not as findings', async () => {
+    const raw = JSON.stringify(WORKING);
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            structuredOutput: WORKING,
+            stopReason: 'cancelled',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 4,
+            total_cost_usd: 0.001,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(metaOf(result)['findingsComplete'], false);
+      assert.equal(metaOf(result)['findings'], undefined);
+      assert.equal(metaOf(result)['parseError'], undefined);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /stopReason "cancelled"/);
+      assert.match(incomplete, /after 4 turns/);
+      assert.match(incomplete, /turn budget was not the cause/);
+      assert.doesNotMatch(incomplete, /Raise maxTurns/);
+      assert.equal(metaOf(result)['structuredOutputError'], undefined);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1);
+      assert.equal(body.slice(0, split), incomplete);
+      assert.equal(body.slice(split + 2), raw);
+    });
+  });
+
+  it('advises raising maxTurns when a cut-off structured review actually received a maxTurns cap', async () => {
+    const raw = JSON.stringify(WORKING);
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true, maxTurns: 8 },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            structuredOutput: WORKING,
+            stopReason: 'cancelled',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 8,
+            total_cost_usd: 0.001,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, true);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /stopReason "cancelled"/);
+      assert.match(incomplete, /after 8 turns/);
+      assert.match(incomplete, /maxTurns 8/);
+      assert.match(incomplete, /Raise maxTurns above 8/);
+      assert.doesNotMatch(incomplete, /turn budget was not the cause/);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1);
+      assert.equal(body.slice(0, split), incomplete);
+      assert.equal(body.slice(split + 2), raw);
+    });
+  });
+
+  it('puts the CLI structuredOutputError verbatim in the explanation and _meta when the review is incomplete', async () => {
+    const raw = JSON.stringify(WORKING);
+    const cliError = 'model did not produce structured output';
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            structuredOutput: WORKING,
+            stopReason: 'cancelled',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 11,
+            total_cost_usd: 0.001,
+            structuredOutputError: cliError,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(metaOf(result)['structuredOutputError'], cliError);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /stopReason "cancelled"/);
+      assert.match(incomplete, /after 11 turns/);
+      assert.ok(
+        incomplete.includes(`The CLI reported: ${JSON.stringify(cliError)}.`),
+        'explanation must quote the CLI error verbatim',
+      );
+      assert.match(incomplete, /turn budget was not the cause/);
+      assert.doesNotMatch(incomplete, /Raise maxTurns/);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1);
+      assert.equal(body.slice(0, split), incomplete);
+      assert.equal(body.slice(split + 2), raw);
+    });
+  });
+
+  it('puts structuredOutputError on _meta for a malformed structured review too', async () => {
+    const raw = 'this is a prose review, not json';
+    const cliError = 'model did not produce structured output';
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            stopReason: 'end_turn',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 1,
+            total_cost_usd: 0.001,
+            structuredOutputError: cliError,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, false);
+      assert.equal(metaOf(result)['parseError'], 'invalid JSON');
+      assert.equal(metaOf(result)['structuredOutputError'], cliError);
+      assert.equal(metaOf(result)['reviewIncomplete'], undefined);
+    });
+  });
+
+  it('treats a working-status object after a normal stop as incomplete without advising a maxTurns raise', async () => {
+    const raw = JSON.stringify(WORKING);
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('dirty.txt', 'needs review\n');
+
+      const { result } = await runReview(
+        { cwd: repo.cwd, uncommitted: true, structured: true },
+        {
+          FAKE_GROK_STDOUT: JSON.stringify({
+            text: raw,
+            structuredOutput: WORKING,
+            stopReason: 'end_turn',
+            sessionId: REPORTED_SESSION,
+            usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            num_turns: 3,
+            total_cost_usd: 0.001,
+          }),
+        },
+      );
+
+      assert.equal(result.isError, true);
+      assert.equal(metaOf(result)['findingsComplete'], false);
+      assert.equal(metaOf(result)['findings'], undefined);
+      assert.equal(metaOf(result)['parseError'], undefined);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /finished normally/);
+      assert.match(incomplete, /stopReason "end_turn"/);
+      assert.match(incomplete, /after 3 turns/);
+      assert.doesNotMatch(incomplete, /Raise maxTurns/);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1);
+      assert.equal(body.slice(0, split), incomplete);
+      assert.equal(body.slice(split + 2), raw);
     });
   });
 });
@@ -551,12 +762,13 @@ describe('runGrok metadata is not overridable by a handler', () => {
 });
 
 describe('review explains why structured findings are missing', { skip: skipGit }, () => {
-  it('names the stop reason when the run ended early, because "invalid JSON" alone blames the model', async () => {
+  it('marks a cut-off run as an incomplete review, because concatenated per-turn JSON is not a review', async () => {
     // `--json-schema` constrains every assistant message, so a multi-turn run emits one JSON
     // object per turn and the concatenation is not valid JSON. Verified against grok 1.0.4:
     // a review that stopped at `cancelled` produced exactly this shape.
+    const raw = '{ "findings": [] }{ "findings": [] }';
     const cancelled = JSON.stringify({
-      text: '{ "findings": [] }{ "findings": [] }',
+      text: raw,
       stopReason: 'cancelled',
       sessionId: REPORTED_SESSION,
       num_turns: 7,
@@ -572,18 +784,27 @@ describe('review explains why structured findings are missing', { skip: skipGit 
         { FAKE_GROK_STDOUT: cancelled },
       );
 
-      const parseError = metaOf(result)['parseError'];
-      assert.ok(typeof parseError === 'string');
-      assert.match(parseError, /stopReason "cancelled"/);
-      assert.match(parseError, /maxTurns/);
-      assert.strictEqual(result.isError, false, 'a degraded parse must not fail the call');
-      assert.match(textOf(result), /findings/);
+      assert.equal(result.isError, true);
+      assert.equal(metaOf(result)['findingsComplete'], false);
+      assert.equal(metaOf(result)['parseError'], undefined);
+      const incomplete = metaOf(result)['reviewIncomplete'];
+      assert.ok(typeof incomplete === 'string');
+      assert.match(incomplete, /stopReason "cancelled"/);
+      assert.match(incomplete, /after 7 turns/);
+      assert.match(incomplete, /turn budget was not the cause/);
+      assert.doesNotMatch(incomplete, /Raise maxTurns/);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1, 'the diagnosis must precede the raw narration');
+      assert.equal(body.slice(0, split), incomplete);
+      assert.equal(body.slice(split + 2), raw);
     });
   });
 
-  it('leaves the parse error alone when the run completed normally', async () => {
+  it('keeps parseError and isError false when the run completed normally with unreadable output', async () => {
+    const raw = 'not json at all';
     const finished = JSON.stringify({
-      text: 'not json at all',
+      text: raw,
       stopReason: 'end_turn',
       sessionId: REPORTED_SESSION,
       num_turns: 1,
@@ -599,7 +820,35 @@ describe('review explains why structured findings are missing', { skip: skipGit 
         { FAKE_GROK_STDOUT: finished },
       );
 
-      assert.strictEqual(metaOf(result)['parseError'], 'invalid JSON');
+      assert.equal(result.isError, false);
+      assert.equal(metaOf(result)['parseError'], 'invalid JSON');
+      assert.equal(metaOf(result)['findingsComplete'], false);
+      assert.equal(metaOf(result)['reviewIncomplete'], undefined);
+      const body = textOf(result);
+      const split = body.indexOf('\n\n');
+      assert.ok(split !== -1);
+      assert.match(body.slice(0, split), /cannot validate/);
+      assert.equal(body.slice(split + 2), raw);
+    });
+  });
+});
+
+describe('review embeds collectDiff context', { skip: skipGit }, () => {
+  it('puts the commit context in the prompt before the diff fence, so a collection header is not dropped', async () => {
+    await withGitRepo(async (repo) => {
+      await repo.write('tracked.txt', 'committed\n');
+      await repo.commit('init');
+      await repo.write('tracked.txt', 'changed\n');
+      const sha = await repo.commit('CONTEXT_SUBJECT_MARKER unique review context');
+
+      const { argvFile } = await runReview({ cwd: repo.cwd, commit: sha });
+      const prompt = promptFromArgv(await readArgv(argvFile));
+      assert.match(prompt, /Context for this target:/);
+      assert.match(prompt, /CONTEXT_SUBJECT_MARKER unique review context/);
+      const contextAt = prompt.indexOf('Context for this target:');
+      const fenceAt = prompt.indexOf('```diff');
+      assert.ok(contextAt !== -1 && fenceAt !== -1);
+      assert.ok(contextAt < fenceAt, 'context must precede the diff fence');
     });
   });
 });

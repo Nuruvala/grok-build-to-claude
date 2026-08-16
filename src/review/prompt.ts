@@ -4,6 +4,8 @@
  * rediscovering it — that is the entire reason we collect it in-process.
  */
 
+import { REVIEW_FINDINGS_SCHEMA } from './schema.js';
+
 export interface ReviewPromptParams {
   readonly targetDescription: string;
   /** Already truncated. This module does not cap. */
@@ -11,45 +13,26 @@ export interface ReviewPromptParams {
   readonly truncationNotice: string | null;
   readonly instructions?: string | undefined;
   readonly structured: boolean;
+  /** Repo-side header from collectDiff (branch, commit log, untracked-file cap). */
+  readonly context?: string | undefined;
 }
-
-/**
- * Serialized JSON Schema for `--json-schema`. Compact on purpose: this string is
- * both the CLI flag value and the copy embedded in a structured prompt.
- */
-export const REVIEW_FINDINGS_SCHEMA: string = JSON.stringify({
-  type: 'object',
-  required: ['findings'],
-  properties: {
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['severity', 'file', 'summary', 'rationale'],
-        properties: {
-          severity: {
-            type: 'string',
-            enum: ['critical', 'high', 'medium', 'low', 'info'],
-          },
-          file: { type: 'string' },
-          summary: { type: 'string' },
-          rationale: { type: 'string' },
-          line: { type: 'integer' },
-        },
-      },
-    },
-    verdict: { type: 'string' },
-  },
-});
 
 export function buildReviewPrompt(params: ReviewPromptParams): string {
   const fence = fenceFor(params.diff);
   const parts: string[] = [
     `You are reviewing: ${params.targetDescription}.`,
     'The diff to review is provided below. Review this exact content; do not rediscover it with git or other tools.',
+  ];
+
+  // Immediately before the fence so a cap notice is not buried after the diff.
+  if (presentContext(params.context)) {
+    parts.push(`Context for this target:\n${params.context}`);
+  }
+
+  parts.push(
     `${fence}diff\n${params.diff}\n${fence}`,
     params.structured ? structuredInstructions() : proseInstructions(),
-  ];
+  );
 
   if (present(params.instructions)) {
     parts.push('Additional instructions from the caller:', params.instructions);
@@ -64,8 +47,9 @@ export function buildReviewPrompt(params: ReviewPromptParams): string {
 
 function structuredInstructions(): string {
   return [
-    'Respond with a single JSON object matching the following schema, and nothing else.',
-    'Do not wrap the JSON in a markdown fence.',
+    'Every message you emit must be a single JSON object matching the schema below, and nothing else. Do not wrap it in a markdown fence.',
+    'While you are still gathering context, emit exactly {"status":"working","findings":[]}. Never describe your own progress as a finding — a finding is a defect in the diff under review, never a note about what you are reading.',
+    'Emit "status":"final" exactly once, as your last message, carrying the complete findings list and a verdict.',
     REVIEW_FINDINGS_SCHEMA,
   ].join('\n\n');
 }
@@ -96,4 +80,8 @@ function fenceFor(diff: string): string {
 
 function present(value: string | undefined): value is string {
   return value !== undefined && value !== '';
+}
+
+function presentContext(value: string | undefined): value is string {
+  return value !== undefined && value.trim() !== '';
 }

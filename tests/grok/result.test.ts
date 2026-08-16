@@ -72,6 +72,7 @@ describe('parseGrokJson success shape', () => {
       { 'grok-4.6-build': { input_tokens: 16424, output_tokens: 32 } },
     );
     assert.equal(result.structuredOutput, null);
+    assert.equal(result.structuredOutputError, null);
   });
 
   it('reads an already-decoded structuredOutput object and does not invent one by parsing text', () => {
@@ -97,6 +98,22 @@ describe('parseGrokJson success shape', () => {
       parseGrokJson(JSON.stringify({ text: 'ok', structuredOutput: ['not', 'an', 'object'] })),
     );
     assert.deepEqual(result.structuredOutput, ['not', 'an', 'object']);
+  });
+
+  it('reads a structuredOutputError string from the same record as the other metadata fields', () => {
+    const result = assertResult(
+      parseGrokJson(
+        JSON.stringify({
+          text: '',
+          stopReason: 'cancelled',
+          sessionId: 'sess-soe',
+          structuredOutputError: 'model did not produce structured output',
+        }),
+      ),
+    );
+    assert.equal(result.structuredOutputError, 'model did not produce structured output');
+    assert.equal(result.structuredOutput, null);
+    assert.equal(result.stopReason, 'cancelled');
   });
 
   it('defaults text to the empty string when absent, because text is the tool body', () => {
@@ -146,6 +163,11 @@ describe('parseGrokJson field degradation', () => {
     { jsonKey: 'usage', resultKey: 'usage', valid: { input_tokens: 1 } },
     { jsonKey: 'total_cost_usd', resultKey: 'totalCostUsd', valid: 0.01 },
     { jsonKey: 'modelUsage', resultKey: 'modelUsage', valid: { 'grok-4.6-build': {} } },
+    {
+      jsonKey: 'structuredOutputError',
+      resultKey: 'structuredOutputError',
+      valid: 'model did not produce structured output',
+    },
   ];
 
   const wrongTypes: readonly (readonly [label: string, value: unknown])[] = [
