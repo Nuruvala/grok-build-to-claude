@@ -186,7 +186,7 @@ describe('grok argv', () => {
       effort: 'high',
       maxTurns: 4,
       tools: ['read', 'search'],
-      disallowedTools: ['run_terminal_cmd'],
+      disallowedTools: ['run_terminal_command'],
       allow: ['Read(src/**)', 'Write(src/**)'],
       deny: ['Bash(rm*)'],
       rules: 'be careful',

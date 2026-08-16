@@ -26,16 +26,16 @@ bundled `/grok-build:*` plugin commands, the handoff is unreliable — responses
 session handling are all hit-and-miss. The plugin is prior art, not a target to match. **Reliability
 is the product.** Every failure mode below is a specific thing this server must not reproduce.
 
-| Failure mode in the plugin                                                                                                                                           | Where                                    | What we do instead                                                                                                     |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Parses model output by scraping prose — tries `JSON.parse`, then a ` ```json ` fence, then slicing between the first `{` and last `}`                                | `lib/grok.mjs` `parseStructuredOutput()` | `--output-format json`; the result object is read from a documented field, never recovered from prose                  |
-| Defaults to `--output-format plain`, so structured fields must be reconstructed                                                                                      | `lib/grok.mjs` `buildHeadlessArgs()`     | `json` or `streaming-json` always; `plain` is not an internal code path                                                |
-| Invents its own `crypto.randomUUID()` session id, passes it as `--session-id`, and reports it as the run's session — including on paths where Grok never recorded it | `lib/grok.mjs` `runHeadlessAgent()`      | Report the `sessionId` Grok returns. Reconcile against `grok sessions` — the CLI's SQLite store is the source of truth |
-| Unbounded output accumulation (`stdout += chunk`) with no cap                                                                                                        | `lib/grok.mjs` `runHeadlessAgent()`      | 10 MB cap per stream with an explicit truncation marker                                                                |
-| No wall-clock timeout and no kill path in the headless runner                                                                                                        | `lib/grok.mjs` `runHeadlessAgent()`      | `GROK_MCP_TIMEOUT_MS`, SIGTERM then SIGKILL against the process group                                                  |
-| `child.on("error")` rejects and discards everything buffered so far                                                                                                  | `lib/grok.mjs` `runHeadlessAgent()`      | Partial output is always returned alongside the error                                                                  |
-| Progress is two coarse phase strings — `starting`, then `finalizing`. Blind for the entire run                                                                       | `lib/grok.mjs` `emitProgress()` calls    | Parse `streaming-json` and forward per-event `notifications/progress`                                                  |
-| Calls `grok import`, a subcommand that does not exist in 1.0.0                                                                                                       | `lib/grok.mjs` `runImport()`             | Not built. See "Known drift" below                                                                                     |
+| Failure mode in the plugin                                                                                                                                           | Where                                    | What we do instead                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Parses model output by scraping prose — tries `JSON.parse`, then a ` ```json ` fence, then slicing between the first `{` and last `}`                                | `lib/grok.mjs` `parseStructuredOutput()` | `--output-format json`; the result object is read from a documented field, never recovered from prose                       |
+| Defaults to `--output-format plain`, so structured fields must be reconstructed                                                                                      | `lib/grok.mjs` `buildHeadlessArgs()`     | `json` or `streaming-json` always; `plain` is not an internal code path                                                     |
+| Invents its own `crypto.randomUUID()` session id, passes it as `--session-id`, and reports it as the run's session — including on paths where Grok never recorded it | `lib/grok.mjs` `runHeadlessAgent()`      | Report the `sessionId` Grok returns. Reconcile against `grok sessions` — the CLI's own session store is the source of truth |
+| Unbounded output accumulation (`stdout += chunk`) with no cap                                                                                                        | `lib/grok.mjs` `runHeadlessAgent()`      | 10 MB cap per stream with an explicit truncation marker                                                                     |
+| No wall-clock timeout and no kill path in the headless runner                                                                                                        | `lib/grok.mjs` `runHeadlessAgent()`      | `GROK_MCP_TIMEOUT_MS`, SIGTERM then SIGKILL against the process group                                                       |
+| `child.on("error")` rejects and discards everything buffered so far                                                                                                  | `lib/grok.mjs` `runHeadlessAgent()`      | Partial output is always returned alongside the error                                                                       |
+| Progress is two coarse phase strings — `starting`, then `finalizing`. Blind for the entire run                                                                       | `lib/grok.mjs` `emitProgress()` calls    | Parse `streaming-json` and forward per-event `notifications/progress`                                                       |
+| Calls `grok import`, a subcommand that does not exist in 1.0.0                                                                                                       | `lib/grok.mjs` `runImport()`             | Not built. See "Known drift" below                                                                                          |
 
 The stated success condition: a long Grok run started from Claude Code is observable while it runs,
 survives an MCP server restart, reports a session id that actually resumes, and never hangs forever.
@@ -94,10 +94,42 @@ grok -p "<prompt>" --output-format json --cwd <dir> --permission-mode plan --san
 ```
 
 - On failure the CLI emits `{"type":"error","message":"..."}` and exits non-zero.
-- `streaming-json` is NDJSON, one `type`-tagged object per line: `thought`, `text`, `tool_call`,
-  `tool_call_update`, `usage`, `plan`, `available_commands`, `end`, `error`. `end` is always last
-  and carries `sessionId` + spend. Treat the type list as non-exhaustive; switch on `type`.
 - Exit codes: `0` success, `1` error, `130` SIGINT, `143` SIGTERM.
+- **A non-zero exit does not mean there is no result.** `--max-turns N` that hits its cap exits `1`
+  with `Error: max turns reached` on stderr, while stdout carries a complete result —
+  `stopReason: "cancelled"`, a real `sessionId`, real `usage`, real `total_cost_usd`. Parse stdout
+  first and let a successful parse win over the exit code, or you discard a resumable session and
+  the spend that produced it.
+
+#### `streaming-json`
+
+NDJSON, one `type`-tagged object per line. Captured live from a two-turn run on 2026-08-16: `text`
+×112, `thought` ×74, `available_commands` ×4, `usage` ×2, `tool_call_update` ×2, `tool_call` ×1,
+`end` ×1. stderr was empty. The type list is **not** closed — a `--max-turns` run emitted
+`max_turns_reached`, which appears in no documentation. Switch on `type` and route the unrecognised
+to a catch-all; never throw on an unknown tag.
+
+```jsonc
+{"type":"text","data":"I'll"}                       // a DELTA, not the whole message
+{"type":"thought","data":"The user wants"}          // also a delta
+{"type":"tool_call","toolCallId":"call-…-0","title":"list_dir","kind":"list","status":"pending",
+ "toolName":"list_dir","rawInput":{"target_directory":"."},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-…-0","status":null,"locations":[{"path":"."}],…}
+{"type":"usage","usage":{…},"signature":"…"}        // PER-TURN, and has no total_tokens
+{"type":"end","stopReason":"end_turn","sessionId":"…","usage":{…},"num_turns":2,
+ "total_cost_usd":0.00891208,"modelUsage":{…}}
+```
+
+Four things that are easy to get wrong:
+
+- **`end` has no `text` field.** The `json` object has one; the `end` event does not. Response text
+  exists only as the concatenation of `text` deltas, in order.
+- **A failing run ends with `error` and no `end`.** Verified with a bad `--model`. Any code that
+  waits for `end` before reporting will wait forever.
+- **`usage` events are per-turn and lack `total_tokens`.** Only `end.usage` is the aggregate. Do not
+  sum the per-turn events.
+- **`tool_call` arrives with `locations: []`**; the path shows up in a later `tool_call_update`,
+  whose `status` is `null` mid-flight and a terminal string at the end.
 
 ### Models and effort
 
@@ -123,20 +155,36 @@ through and let the CLI reject unknown ids.
 - `-r <id|title>` resumes; `-c` continues the most recent session for the cwd.
 - `-s <uuid>` creates a **new** session with a caller-chosen UUID. It does **not** resume, and it
   errors if the UUID already exists. With `-r`/`-c` it requires `--fork-session`.
-- Sessions live in `~/.grok/sessions` (SQLite) and are enumerable via `grok sessions list|search`.
-  **Prefer the CLI's own store over an in-memory map** — this is the main correctness win over
-  `codex-mcp-server`, whose sessions die with the server process.
+- Sessions are enumerable via `grok sessions list|search`. **Prefer the CLI's own store over an
+  in-memory map** — this is the main correctness win over `codex-mcp-server`, whose sessions die
+  with the server process.
+- **The store is a directory tree, not a SQLite database.** Verified on 2026-08-16:
+
+  ```
+  ~/.grok/sessions/<percent-encoded-cwd>/<session-uuid>/
+      summary.json          chat_history.jsonl    events.jsonl
+      prompt_context.json   system_prompt.txt     updates.jsonl    …
+  ~/.grok/sessions/session_search.sqlite     # search index only, not the record of truth
+  ```
+
+  The cwd segment is percent-encoded, so `/home/nuru/repos/x` becomes `%2Fhome%2Fnuru%2Frepos%2Fx`.
+  `summary.json` is the useful one and is already structured: `info.id`, `info.cwd`,
+  `session_summary`, `created_at`, `updated_at`, `num_messages`, `current_model_id`, `git_root_dir`,
+  `git_remotes`, `head_commit`.
+
+- **`grok sessions list` has no `--json` flag.** It prints a fixed-width text table. Read
+  `summary.json` rather than scraping that table — the table is presentation and will change.
 
 ### Safety flags
 
-| Flag                             | Values                                                                      |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `--permission-mode`              | `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`    |
-| `--sandbox`                      | `off` (default), `workspace`, `devbox`, `read-only`, `strict`               |
-| `--always-approve`               | alias `--yolo`, equivalent to `--permission-mode bypassPermissions`         |
-| `--allow` / `--deny`             | repeatable `ToolPrefix(glob)` rules, e.g. `Bash(npm*)`, `Write(src/**)`     |
-| `--tools` / `--disallowed-tools` | comma-separated internal tool ids (shell is `run_terminal_cmd`, not `bash`) |
-| `--max-turns <N>`                | headless only                                                               |
+| Flag                             | Values                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------- |
+| `--permission-mode`              | `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`        |
+| `--sandbox`                      | `off` (default), `workspace`, `devbox`, `read-only`, `strict`                   |
+| `--always-approve`               | alias `--yolo`, equivalent to `--permission-mode bypassPermissions`             |
+| `--allow` / `--deny`             | repeatable `ToolPrefix(glob)` rules, e.g. `Bash(npm*)`, `Write(src/**)`         |
+| `--tools` / `--disallowed-tools` | comma-separated internal tool ids (shell is `run_terminal_command`, not `bash`) |
+| `--max-turns <N>`                | headless only                                                                   |
 
 `--sandbox read-only` blocks child-process network on Linux (seccomp); it is a no-op on macOS. Do
 not describe it as a network guarantee in cross-platform docs.

@@ -110,16 +110,16 @@ describe('buildGrokArgs flag emission', () => {
   });
 
   it('emits --tools as a single comma-joined flag, not one flag per tool', () => {
-    const argv = buildGrokArgs(minimal({ tools: ['read', 'search', 'run_terminal_cmd'] }));
-    assertAdjacent(argv, '--tools', 'read,search,run_terminal_cmd');
+    const argv = buildGrokArgs(minimal({ tools: ['read', 'search', 'run_terminal_command'] }));
+    assertAdjacent(argv, '--tools', 'read,search,run_terminal_command');
     assert.equal(argv.filter((part) => part === '--tools').length, 1);
   });
 
   it('emits --disallowed-tools as a single comma-joined flag', () => {
     assertAdjacent(
-      buildGrokArgs(minimal({ disallowedTools: ['run_terminal_cmd', 'write'] })),
+      buildGrokArgs(minimal({ disallowedTools: ['run_terminal_command', 'write'] })),
       '--disallowed-tools',
-      'run_terminal_cmd,write',
+      'run_terminal_command,write',
     );
   });
 
@@ -361,7 +361,7 @@ describe('buildGrokArgs immutability and order', () => {
         effort: 'high',
         maxTurns: 4,
         tools: ['read', 'search'],
-        disallowedTools: ['run_terminal_cmd'],
+        disallowedTools: ['run_terminal_command'],
         allow: ['Read(src/**)', 'Write(src/**)'],
         deny: ['Bash(rm*)'],
         rules: 'be careful',
@@ -395,7 +395,7 @@ describe('buildGrokArgs immutability and order', () => {
         '--tools',
         'read,search',
         '--disallowed-tools',
-        'run_terminal_cmd',
+        'run_terminal_command',
         '--allow',
         'Read(src/**)',
         '--allow',

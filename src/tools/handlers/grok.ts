@@ -76,7 +76,7 @@ const GrokInput = z
       .array(z.string())
       .optional()
       .describe(
-        'Internal tool ids to allow, passed as a single comma-joined `--tools`. Shell is `run_terminal_cmd`, not `bash`.',
+        'Internal tool ids to allow, passed as a single comma-joined `--tools`. Shell is `run_terminal_command`, not `bash`.',
       ),
     disallowedTools: z
       .array(z.string())
