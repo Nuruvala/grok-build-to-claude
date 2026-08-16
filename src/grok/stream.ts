@@ -229,6 +229,7 @@ function emptyResult(): GrokRunResult {
     usage: null,
     totalCostUsd: null,
     modelUsage: null,
+    structuredOutput: null,
   });
 }
 

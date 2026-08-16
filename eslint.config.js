@@ -14,7 +14,11 @@ export default defineConfig([
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['eslint.config.js', 'tests/fixtures/fake-grok.mjs'],
+          allowDefaultProject: [
+            'eslint.config.js',
+            'tests/fixtures/fake-grok.mjs',
+            'tests/fixtures/git-repo.mjs',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },

@@ -14,6 +14,7 @@ const EMPTY_RESULT: GrokRunResult = {
   usage: null,
   totalCostUsd: null,
   modelUsage: null,
+  structuredOutput: null,
 };
 
 function toolCall(

@@ -12,6 +12,7 @@ export type ErrorKind =
   | 'permission-denied'
   | 'binary-not-found'
   | 'grok-failed'
+  | 'git-failed'
   | 'timeout'
   | 'internal';
 
@@ -88,6 +89,38 @@ export class PermissionDeniedError extends GrokMcpError {
       },
     );
     this.name = 'PermissionDeniedError';
+  }
+}
+
+/**
+ * A git invocation that had to fail — missing binary, not a repo, or a ref that
+ * does not resolve. Expected non-zero exits (no HEAD, no upstream, `diff --no-index`)
+ * are not this error; those are detection, not failure.
+ */
+export class GitError extends GrokMcpError {
+  constructor(
+    message: string,
+    options: {
+      remedy?: string;
+      stderr?: string;
+      cwd?: string;
+      argv?: readonly string[];
+      cause?: unknown;
+    } = {},
+  ) {
+    const stderr = options.stderr?.trim();
+    const details: Record<string, unknown> = {};
+    if (stderr !== undefined && stderr !== '') details['stderr'] = stderr;
+    if (options.cwd !== undefined) details['cwd'] = options.cwd;
+    if (options.argv !== undefined) details['argv'] = [...options.argv];
+
+    const body = stderr !== undefined && stderr !== '' ? `${message}\n\n${stderr}` : message;
+    super('git-failed', body, {
+      remedy: options.remedy ?? 'Check that git is installed and that cwd is a git working tree.',
+      ...(Object.keys(details).length > 0 ? { details } : {}),
+      ...(options.cause === undefined ? {} : { cause: options.cause }),
+    });
+    this.name = 'GitError';
   }
 }
 

@@ -20,6 +20,8 @@ export interface GrokRunResult {
   readonly usage: GrokUsage | null;
   readonly totalCostUsd: number | null;
   readonly modelUsage: Readonly<Record<string, unknown>> | null;
+  /** Present only when the run passed `--json-schema`. Already decoded by the CLI, never a string to re-parse. */
+  readonly structuredOutput: unknown;
 }
 
 export type ParsedGrokOutput =
@@ -80,6 +82,9 @@ export function readGrokResultFields(record: Record<string, unknown>): GrokRunRe
     usage: parseUsage(record['usage']),
     totalCostUsd: numberField(record, 'total_cost_usd'),
     modelUsage: parseModelUsage(record['modelUsage']),
+    // Already-decoded by the CLI (verified grok 1.0.4, 2026-08-16). Pass through
+    // as-is; parsing `text` to recover this is the scrape this field exists to avoid.
+    structuredOutput: record['structuredOutput'] ?? null,
   });
 }
 

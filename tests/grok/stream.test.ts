@@ -345,6 +345,7 @@ describe('interpretStreamLine degradation', () => {
       usage: null,
       totalCostUsd: null,
       modelUsage: null,
+      structuredOutput: null,
     });
   });
 });
@@ -379,6 +380,28 @@ describe('createStreamCollector folding', () => {
     collector.accept(interpretStreamLine(JSON.stringify({ type: 'end', ...END_METADATA })));
     const fromStream = assertResultOutcome(collector.outcome());
 
+    assert.deepEqual(fromStream, fromJson);
+  });
+
+  it('carries structuredOutput from the streaming end event through the shared field reader, matching parseGrokJson', () => {
+    const structuredOutput = {
+      findings: [{ severity: 'high', file: 'src/a.ts', summary: 'unchecked return' }],
+      verdict: 'needs work',
+    };
+    const text = 'Here you go';
+    const record = { text, ...END_METADATA, structuredOutput };
+    const fromJson = assertParsedResult(parseGrokJson(JSON.stringify(record)));
+
+    const collector = createStreamCollector();
+    collector.accept(interpretStreamLine(JSON.stringify({ type: 'text', data: 'Here' })));
+    collector.accept(interpretStreamLine(JSON.stringify({ type: 'text', data: ' you go' })));
+    collector.accept(
+      interpretStreamLine(JSON.stringify({ type: 'end', ...END_METADATA, structuredOutput })),
+    );
+    const fromStream = assertResultOutcome(collector.outcome());
+
+    assert.deepEqual(fromStream.structuredOutput, structuredOutput);
+    assert.deepEqual(fromJson.structuredOutput, structuredOutput);
     assert.deepEqual(fromStream, fromJson);
   });
 

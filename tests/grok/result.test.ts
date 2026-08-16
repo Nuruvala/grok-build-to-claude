@@ -71,6 +71,32 @@ describe('parseGrokJson success shape', () => {
       { ...result.modelUsage },
       { 'grok-4.6-build': { input_tokens: 16424, output_tokens: 32 } },
     );
+    assert.equal(result.structuredOutput, null);
+  });
+
+  it('reads an already-decoded structuredOutput object and does not invent one by parsing text', () => {
+    const structuredOutput = {
+      findings: [{ severity: 'high', file: 'src/a.ts', summary: 'unchecked return' }],
+      verdict: 'needs work',
+    };
+    const result = assertResult(
+      parseGrokJson(
+        JSON.stringify({
+          text: '{"findings":[],"verdict":"from text — must not be parsed"}',
+          sessionId: 'sess-structured',
+          structuredOutput,
+        }),
+      ),
+    );
+    assert.deepEqual(result.structuredOutput, structuredOutput);
+    assert.equal(result.sessionId, 'sess-structured');
+  });
+
+  it('passes a non-object structuredOutput through as-is, because the CLI already decoded it', () => {
+    const result = assertResult(
+      parseGrokJson(JSON.stringify({ text: 'ok', structuredOutput: ['not', 'an', 'object'] })),
+    );
+    assert.deepEqual(result.structuredOutput, ['not', 'an', 'object']);
   });
 
   it('defaults text to the empty string when absent, because text is the tool body', () => {
