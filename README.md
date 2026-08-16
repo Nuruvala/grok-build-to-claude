@@ -11,9 +11,9 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M2 is complete: the server runs real headless Grok agents, streams progress
-> while they run, and reports session, usage, and cost. The `review`, `websearch`, `sessions`,
-> `status`, and `stop` tools are on the way — see [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M3 is complete: the server runs real headless Grok agents, streams progress
+> while they run, reviews git diffs, and reports session, usage, and cost. The `websearch`,
+> `sessions`, `status`, and `stop` tools are on the way — see [ROADMAP.md](ROADMAP.md).
 
 ## Progress
 
@@ -102,13 +102,38 @@ child process untouched.
 
 ## Tools
 
-| Tool    | Read-only  | Purpose                                                                                         |
-| ------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `grok`  | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
-| `check` | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
-| `help`  | yes        | `grok --help` passthrough                                                                       |
+| Tool     | Read-only  | Purpose                                                                                         |
+| -------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `grok`   | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
+| `review` | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
+| `check`  | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
+| `help`   | yes        | `grok --help` passthrough                                                                       |
 
-`review`, `websearch`, `sessions`, `status`, and `stop` are still on the roadmap.
+`websearch`, `sessions`, `status`, and `stop` are still on the roadmap.
+
+### `review`
+
+The diff is collected in-process and embedded in the prompt, so the model does not spend turns
+rediscovering what it is meant to review.
+
+```
+> review my working tree with grok-build
+> review the diff against origin/main
+```
+
+Targets are `uncommitted`, `base: "<ref>"` (a merge-base diff, so commits that landed on the base
+after you branched are not attributed to you), or `commit: "<sha>"`. With none given it
+auto-detects: the upstream diff when your branch is ahead, otherwise the working tree — and it says
+which it chose rather than guessing silently.
+
+`review` is **always read-only**, whatever `GROK_MCP_PERMISSION_CEILING` allows. It takes no
+`permission`, `write`, or `yolo` argument, because a review that edits the code under review is
+never what was wanted.
+
+Pass `structured: true` for machine-readable findings (`severity`, `file`, `line`, `summary`,
+`rationale`) on `_meta.findings`. If the model's output cannot be read as findings, the call still
+succeeds and returns the prose plus a `_meta.parseError` explaining why — a degraded review beats a
+failed one.
 
 ## Development
 

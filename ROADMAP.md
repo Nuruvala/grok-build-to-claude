@@ -25,8 +25,8 @@ Get a valid, empty-but-running MCP server into the repo.
 - `src/config.ts`: env parsing with defaults, exported as a frozen object. Parses and validates
   `GROK_MCP_PERMISSION_CEILING` / `GROK_MCP_DEFAULT_PERMISSION` at startup — an unknown level, or a
   default above the ceiling, fails fast on stderr rather than degrading at call time.
-- `LICENSE` — MIT, "Copyright (c) 2026 Jorge Montero". README skeleton, NOTICE if any third-party
-  text is carried.
+- `LICENSE` — MIT, "Copyright (c) 2026 Jorge Montero Varela". README skeleton, NOTICE if any
+  third-party text is carried.
 - `.github/workflows/ci.yml`: typecheck + lint + format + build + test on Node 22/24/26, Linux and
   macOS. Node 20 reached end of life on 2026-04-30, so the floor is 22.
 
@@ -175,6 +175,46 @@ Three things the fixtures could not have caught, all found by running the real b
   upstream, submodule present).
 - `structured: true` returns parsed findings; malformed model JSON degrades to raw text plus a
   `parseError` field rather than failing the call.
+
+**Status: complete.** 506 tests. `review` is live alongside `check`, `grok`, and `help`, built on a
+shared run core (`src/tools/run.ts`) extracted from the `grok` handler, which is now argv
+construction plus one call.
+
+`--json-schema` turned out to be better than planned: the CLI returns an already-decoded
+`structuredOutput` field, on the streaming `end` event as well as the `json` object, so structured
+findings and progress streaming compose instead of excluding each other and no text is ever scraped.
+
+Verified end to end against grok 1.0.4 by reviewing this repo's own working tree: 322 progress
+notifications, 33 files, `structuredOutput` parsed into four findings, session id present in
+`grok sessions list`, `--permission-mode plan --sandbox read-only` in the argv despite a `full`
+ceiling.
+
+Four bugs the fixtures could not have caught, all found by running the real binary:
+
+- **A single argv element cannot exceed 128 KiB on Linux (MAX_ARG_STRLEN).** A review of this repo's
+  working tree built a 158 KiB prompt, and `spawn` failed with E2BIG before grok started — reported
+  as "Failed to start grok", which sends the reader to fix an install that was never broken. Prompts
+  over 64 KiB now travel as `--prompt-file`, and the spawn error carries its errno.
+- **Untracked directories were expanded without consulting `.gitignore`.** `git status --porcelain`
+  collapses an untracked tree into one `?? pkg/` record; walking that record by hand embedded
+  `node_modules` and spent the untracked-file cap on dependencies. Replaced with
+  `git ls-files --others --exclude-standard -z`, which expands, applies ignore rules, skips
+  submodules, and drops the C-quoting that had been silently losing non-ASCII filenames.
+- **A timed-out `git diff` resolved as a successful partial.** The kill makes `close` fire with
+  whatever bytes arrived, indistinguishable from a complete diff — a review of a fragment, presented
+  as a review of the change.
+- **The hard-cut truncation path reported `omittedFiles: []`** even though every file behind the
+  oversized one was dropped too, so a large lockfile could push the entire source out of a review
+  behind a bare byte count.
+
+The first two of those were found by `review` reviewing its own diff.
+
+**Known behaviour, not yet addressed:** `--json-schema` constrains _every_ assistant message, so a
+review that takes several turns emits one JSON object per turn and `text` is their concatenation —
+not valid JSON. Only a run reaching `end` carries `structuredOutput`. The degradation path is
+correct (raw text, `parseError`, `isError: false`) and the message now names the stop reason, but a
+multi-turn structured review still returns prose rather than findings. Constraining the reviewer's
+tools so it answers from the embedded diff is the likely fix; it needs its own verification pass.
 
 ---
 

@@ -57,8 +57,10 @@ before debugging our own server.
 
 ## Verified Grok CLI facts
 
-Verified against **grok 1.0.0 (3cd0d0cbce) [stable]** on 2026-08-16. Re-verify after any CLI
-upgrade; the CLI moves fast and the plugin above has already drifted from it.
+Verified against **grok 1.0.0 (3cd0d0cbce) [stable]** and re-verified against **grok 1.0.4
+(d846eb93d9) [stable]**, both on 2026-08-16. Everything below held across that upgrade except where
+a line says otherwise. Re-verify after any CLI upgrade; the CLI moves fast and the plugin above has
+already drifted from it.
 
 ### Headless invocation
 
@@ -131,6 +133,31 @@ Four things that are easy to get wrong:
 - **`tool_call` arrives with `locations: []`**; the path shows up in a later `tool_call_update`,
   whose `status` is `null` mid-flight and a terminal string at the end.
 
+In 1.0.4 the `end` event also carries `requestId`, which 1.0.0 emitted only on the `json` object.
+Read it as optional — it is not worth a version check.
+
+#### `--json-schema`
+
+`--json-schema '<schema>'` constrains the model to produce JSON matching the schema. Verified live
+on 1.0.4; the flag is absent from the 1.0.0 notes above only because it was never probed then.
+
+Three facts, all verified with a two-field schema on 2026-08-16:
+
+- **The result gains a `structuredOutput` field holding the parsed object.** Not a string — an
+  already-decoded value, sitting alongside `text` (which carries the same JSON as a string). Read
+  `structuredOutput`; parsing `text` is the scraping this repo exists to avoid.
+- **`structuredOutput` appears on the streaming `end` event too**, not only on the `json` object.
+  Structured output and progress streaming are therefore not mutually exclusive, and the
+  json/streaming metadata identity from M2 survives.
+- **The schema constrains every assistant message, not just the last one.** A multi-turn run emits
+  one JSON object per turn, so the concatenated `text` deltas are not valid JSON. Only a run that
+  reaches `end` carries `structuredOutput`. Treat `structuredOutput` as the sole source and a
+  non-`end_turn` stop reason as the explanation when it is missing — do not try to recover the last
+  object out of the concatenation.
+- **"Implies `--output-format json`" in `--help` is not the whole truth.** An explicit
+  `--output-format streaming-json` wins over the implication: the run streamed 78 NDJSON lines and
+  still produced `structuredOutput` on `end`. Only an _unset_ output format is forced to `json`.
+
 ### Models and effort
 
 `grok models` on this account lists exactly two: `grok-4.6` (default) and `grok-4.5`. Our defaults
@@ -189,10 +216,16 @@ through and let the CLI reject unknown ids.
 `--sandbox read-only` blocks child-process network on Linux (seccomp); it is a no-op on macOS. Do
 not describe it as a network guarantee in cross-platform docs.
 
+**The two `disallowed` spellings are different flags.** `--disallowedTools` is a compat _alias for
+`--deny`_ and takes one `ToolPrefix(glob)` rule; `--disallowed-tools` takes a comma-separated list
+of built-in tool ids. `--allowedTools` aliases `--allow` the same way. A hyphen decides which of two
+unrelated flags you get, and neither errors on the other's argument shape — verified in
+`grok --help` on 1.0.4. We emit `--disallowed-tools` and `--allow`/`--deny`.
+
 ### Known drift and gotchas
 
-- **`grok import` does not exist in 1.0.0.** The bundled plugin's `/grok-build:import` and its
-  `runImport()` helper call it anyway. Do not build a Claude→Grok transcript transfer on that
+- **`grok import` does not exist in 1.0.0 or 1.0.4.** The bundled plugin's `/grok-build:import` and
+  its `runImport()` helper call it anyway. Do not build a Claude→Grok transcript transfer on that
   subcommand. If we want transfer, read the Claude `.jsonl` transcript ourselves and feed it via
   `--prompt-file`.
 - `--effort` accepts `none|minimal|low|medium|high|xhigh|max` per the docs, plus per-model menu ids.
@@ -205,6 +238,14 @@ not describe it as a network guarantee in cross-platform docs.
   it.
 - `--cwd` nested inside a monorepo makes Grok discover the whole repo as project root and start
   slowly. Pass the narrowest useful directory.
+- **A single argv element is capped at 128 KiB on Linux** (MAX_ARG_STRLEN, 32 pages), independently
+  of the far larger total ARG_MAX. `-p` with an embedded diff blows through it and `spawn` fails
+  with E2BIG before grok runs. Use `--prompt-file` above ~64 KiB; verified on 1.0.4 that a 186 KiB
+  file is read in full, with its last line intact.
+- **A large `--prompt-file` is "offloaded", not inlined.** grok writes it to
+  `~/.grok/sessions/<cwd>/<id>/prompts/prompt_0.txt` and the agent reads it back with `read_file`,
+  across several turns. The content all arrives, but it costs turns — so a `--max-turns` that looks
+  generous for the task can still cut the run off mid-read.
 
 ## Design rules
 
