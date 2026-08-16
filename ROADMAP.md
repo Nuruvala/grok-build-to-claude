@@ -127,6 +127,30 @@ Stop MCP clients from timing out on multi-minute agent runs.
   produces 12 distinct progress messages. Two phase strings for a ten-minute run is the failure
   being fixed.
 
+**Status: complete.** 372 tests. `stream.ts` and `progress.ts` at 100% line, branch, and function
+coverage.
+
+Every acceptance criterion is met, and the slow-run one is met by a pair of tests rather than one:
+the same fixture succeeds with `resetTimeoutOnProgress: true` and fails without it, so the test
+cannot pass vacuously on a run that merely finished quickly. A few seconds of fixture proves the
+same mechanism as five minutes.
+
+Verified end to end against grok 1.0.0, not only against fixtures: a real run produced eleven
+distinct progress lines — `list_dir .`, `read_file README.md`, `read_file — completed`, interleaved
+reasoning and response tails — and the reported session id was present in `grok sessions list`.
+
+Three things the fixtures could not have caught, all found by running the real binary:
+
+- **`finished` arrived before the model's last words.** Pending narration was flushed after the
+  stream drained, so the terminal line jumped the queue. Narration is now flushed before any
+  discrete event — and before `accept`, not after, since `accept` numbers its emission when called
+  and a later flush would carry the higher number.
+- **`--max-turns` exits 1 with a complete result.** The handler treated the exit code as the
+  authority and returned an error with a raw stdout dump, discarding a resumable session id and the
+  spend that bought it. A parsed result now wins over the exit code.
+- **Chunked stdout was decoded per chunk**, corrupting any multi-byte character split across a
+  boundary. Harmless while nothing consumed `onStdout`; not harmless once a JSON parser does.
+
 ---
 
 ## M3 — `review`

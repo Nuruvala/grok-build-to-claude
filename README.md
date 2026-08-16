@@ -11,9 +11,31 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M1 is complete: the server runs real headless Grok agents and reports session,
-> usage, and cost. The `review`, `websearch`, `sessions`, `status`, and `stop` tools are on the way
-> — see [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M2 is complete: the server runs real headless Grok agents, streams progress
+> while they run, and reports session, usage, and cost. The `review`, `websearch`, `sessions`,
+> `status`, and `stop` tools are on the way — see [ROADMAP.md](ROADMAP.md).
+
+## Progress
+
+A long agent run is visible while it happens, rather than a silent wait ending in a wall of text.
+When your client sends a `progressToken`, the server runs Grok with `--output-format streaming-json`
+and forwards a notification per event:
+
+```
+#5  list_dir .
+#6  read_file README.md
+#7  read_file — completed
+#8  thinking: the user asked me to list files, read README.md, then …
+#10 writing: DONE
+#11 finished: end_turn (2 turns)
+```
+
+Progress tracks what the agent is doing, not what phase it is in. Reasoning and response text are
+coalesced so a token stream does not flood your client, while tool calls are reported as they
+happen. Clients that support `resetTimeoutOnProgress` will not time out mid-run.
+
+A client that sends no `progressToken` gets the cheaper non-streaming path and pays nothing for
+this.
 
 ## Requirements
 
