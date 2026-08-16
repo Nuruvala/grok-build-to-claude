@@ -11,9 +11,10 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M3 is complete: the server runs real headless Grok agents, streams progress
-> while they run, reviews git diffs, and reports session, usage, and cost. The `websearch`,
-> `sessions`, `status`, and `stop` tools are on the way — see [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M4 is complete: the server runs real headless Grok agents, streams progress
+> while they run, reviews git diffs, lists the sessions those runs created, and reports session,
+> usage, and cost. The `websearch`, `status`, and `stop` tools are on the way — see
+> [ROADMAP.md](ROADMAP.md).
 
 ## Progress
 
@@ -102,14 +103,15 @@ child process untouched.
 
 ## Tools
 
-| Tool     | Read-only  | Purpose                                                                                         |
-| -------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `grok`   | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
-| `review` | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
-| `check`  | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
-| `help`   | yes        | `grok --help` passthrough                                                                       |
+| Tool       | Read-only  | Purpose                                                                                         |
+| ---------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `grok`     | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
+| `review`   | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
+| `sessions` | always     | List, search, and look up the Grok sessions on this machine                                     |
+| `check`    | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
+| `help`     | yes        | `grok --help` passthrough                                                                       |
 
-`websearch`, `sessions`, `status`, and `stop` are still on the roadmap.
+`websearch`, `status`, and `stop` are still on the roadmap.
 
 ### `review`
 
@@ -149,6 +151,37 @@ salvaged from a partial response by pattern-matching.
 
 Structured reviews of large targets do fail this way with some regularity. The failure is loud by
 design.
+
+A review that reaches for a shell is refused, not killed. In headless mode an unapprovable tool
+request cancels the entire run while the CLI still exits 0, so `review` denies the shell and edit
+tools outright — the model is told no and finishes its review instead of dying mid-sentence.
+
+### `sessions`
+
+Every Grok run leaves a session on disk, and every session id this server reports can be resumed
+later — from any directory, by you in a terminal or by another tool call.
+
+```
+> list my recent grok sessions
+> what grok sessions did I run in this repo?
+> find the grok session about the rate limiter
+```
+
+Sessions are read from `$GROK_HOME/sessions` (default `~/.grok/sessions`), which is the CLI's own
+store, so they survive restarts of this server, of your MCP client, and of your machine. Pass `id`
+for one session, `query` for a case-insensitive search over titles, first prompts, and ids, `cwd` to
+scope to one project, and `limit` to bound the list.
+
+A run that has just finished has no title yet — Grok fills those in later, if at all — so rows fall
+back to the first prompt of the session, and `titleSource` tells you which you are looking at. Every
+row carries `resumeCommand`, and so does every `grok` and `review` result:
+
+```
+grok -r 01a00c8d-970c-7531-8a12-31dac582c22b
+```
+
+Search is local-only. `grok sessions search` also consults a remote index; this tool does not, so a
+session that exists only server-side will not appear.
 
 ## Development
 

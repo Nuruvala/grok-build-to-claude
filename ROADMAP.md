@@ -275,7 +275,11 @@ regressions from this change:
 
 ---
 
-## M4 — Sessions
+## M4 — Sessions ✅
+
+Shipped 2026-08-17. `sessions` lists, searches, and looks up real Grok sessions by reading
+`$GROK_HOME/sessions` directly; every run that reports a session id now also reports the command
+that resumes it.
 
 **Deliverables**
 
@@ -296,6 +300,74 @@ regressions from this change:
 - A session id returned by a `grok` call is findable via the `sessions` tool immediately afterward.
   A reported id that does not exist in `~/.grok/sessions` is a test failure — this is the plugin's
   "session id that does not resume" bug.
+
+**Delivered.** All three acceptance criteria pass against grok 1.0.4, the first two in
+`tests/e2e/sessions.e2e.test.ts` (`GROK_MCP_E2E=1`, skipped in a normal run): a marker word given to
+one call is recalled by the next through `resume`, and the reported id is found both by `id` lookup
+and in a `cwd`-scoped list. The session-conflict matrix was already enforced in M1 and needed no
+work.
+
+**Deviation from the plan, deliberately.** The tool does not shell out to
+`grok sessions list|search`. `list` has no `--json` flag and prints a fixed-width table scoped to
+the current directory; scraping it is exactly the failure mode this repo exists to avoid. The store
+is read directly instead — `summary.json` is already structured, and reading it is what makes cwd
+scoping, id lookup, and the first-prompt fallback possible at all. **What that costs:**
+`grok sessions search` also consults a remote index, so sessions that exist only server-side are
+invisible to us. The tool's own description says so rather than implying completeness.
+
+**A fresh session has no title, which drove the design.** Verified across 117 sessions: a headless
+run leaves `session_summary: ""` and no `generated_title`, so the sessions this server creates are
+precisely the ones a title-only lister shows as blank rows. Each row therefore falls back to the
+first user prompt, read from a bounded 128 KiB head of `chat_history.jsonl`, and `titleSource`
+reports which of the two the label came from — a fallback we invented is never presented as a title
+Grok wrote.
+
+**Found by reviewing the M4 diff with the repo's own `review` tool, and fixed:**
+
+- `query` matched only within the 200-session first-prompt window, so a title or id hit on the 201st
+  most recent session came back as "no matches". Title and id now match across every loaded record;
+  the cap bounds history reads only, and a truncated prompt search says so.
+- An `id` lookup went through the 2000-directory scan cap in readdir order, so on a large store the
+  newest sessions — including one just created — could answer `found: false`. That is the plugin bug
+  this milestone exists to invert. Lookup is now direct: the id is the directory name, so it reads
+  one summary and no longer scans.
+- The same cap could hide the newest sessions from a list. When the cap actually bites, directories
+  are now `stat`-sorted by mtime first; below the cap nothing extra is paid.
+- `_meta.sessions[]` reported `titleSource: "prompt"` while carrying neither the prompt nor the
+  label, leaving a machine consumer unable to tell fresh sessions apart. Both are now included.
+- `summary.json` was read unbounded while histories were capped. Now 256 KiB, and an oversized file
+  degrades to `unreadable` rather than into memory.
+- An encoded-cwd directory that could not be listed dropped a whole project's sessions with only a
+  debug log. Counted as `unlistedDirs` and surfaced in the partial-listing line.
+
+### The reliability bug M4 uncovered in shipped code
+
+Dogfooding M4 through `review` produced two runs in a row that returned `isError: false` with a body
+of pure narration — _"I'll start by reading the full review request…"_ — and no review. The event
+log gave the mechanism, and it is the most valuable thing this milestone produced:
+
+**In headless mode, a permission request that cannot be granted cancels the whole run, and the CLI
+still exits 0.** 18 runs in this machine's store died that way; 15 of them reaching for
+`run_terminal_command`. `--permission-mode dontAsk` behaves the same. An explicit `--deny` rule, by
+contrast, is recoverable — the model is told no and finishes its answer. Full evidence is in
+CLAUDE.md under "An unapprovable tool request kills the run".
+
+Fixed in four places:
+
+- `review` passes `--deny 'Bash(*)' 'Edit(*)' 'Write(*)'`, so a reviewer that reaches for a shell is
+  refused instead of killed. This narrows what review may do; it does not widen it.
+- The review prompt now states plainly that there is no shell and no edit tool in this run.
+- A cut-off prose review is `isError: true` with the diagnosis leading the body, matching what
+  structured mode already did. The default mode of the tool was the one without the check.
+- `run.ts` marks any run whose stop reason is not `end_turn`, including on exit 0. Before, a
+  cancelled run was indistinguishable from a finished one in the tool result.
+
+With those in place the same review completed in 12 turns and found the six defects listed above.
+
+**Left open, deliberately.** Search is local-only (above). The first-prompt fallback reads at most
+the 200 most recent histories per query, and a truncated search reports itself rather than
+pretending to be exhaustive. `sessions delete` is not exposed: M4 is a read-only milestone, and a
+destructive session tool needs its own thinking about confirmation.
 
 ---
 

@@ -176,9 +176,10 @@ ones that decide whether structured output is safe to ship:
   it otherwise. Observed value: `"model did not produce structured output"`. Read it instead of
   inferring a cause from the stop reason.
 - **`stopReason: "cancelled"` does not imply a turn cap.** Captured with no `--max-turns` flag at
-  all, empty stderr, and no `max_turns_reached` event: the CLI aborts the run when the model stops
-  conforming to the schema. Only blame the turn budget when the caller actually set one — otherwise
-  the advice sends them to spend more money on the same failure.
+  all, empty stderr, and no `max_turns_reached` event. Only blame the turn budget when the caller
+  actually set one — otherwise the advice sends them to spend more money on the same failure. The
+  most common cause turned out to be something else entirely: see "An unapprovable tool request
+  kills the run" below.
 - **Completion is stochastic and tracks target size.** The same commit, same flags, same schema
   reached `end_turn` at 9, 15, and 17 turns and cancelled at 6, 8, and 11 across six runs. A larger
   target failed more often. Structured output is best-effort; the degradation path is not a corner
@@ -227,6 +228,79 @@ through and let the CLI reject unknown ids.
 
 - **`grok sessions list` has no `--json` flag.** It prints a fixed-width text table. Read
   `summary.json` rather than scraping that table — the table is presentation and will change.
+
+Five more, measured across the 119 sessions in this machine's store while building the `sessions`
+tool on 2026-08-17:
+
+- **`summary.json` exists the moment a headless run exits**, so a session id a call reports is
+  findable immediately. But a fresh headless session has `session_summary: ""` and **no
+  `generated_title`** — titles are filled in later, if ever. The sessions this server creates are
+  therefore exactly the ones with no title, and a lister that only reads title fields shows its own
+  work as blank rows.
+- **Field presence is not uniform.** Always present: `info.id`, `info.cwd`, `session_summary`,
+  `created_at`, `updated_at`, `num_messages`, `current_model_id`, `agent_name`, `sandbox_profile`,
+  `reasoning_effort`. Often absent: `generated_title` (99/117), `head_branch` / `head_commit` /
+  `git_remotes` / `git_root_dir` (92/117 — absent outside a repo), `request_id` (112/117). Parse
+  every field as optional.
+- **The first real user prompt is recoverable from `chat_history.jsonl`**, which is the only label a
+  fresh session has. It is NDJSON; the system prompt and synthetic user messages (environment
+  preamble, `<system-reminder>` blocks carrying `synthetic_reason`) come first. The prompt is the
+  first `{"type":"user"}` line that also carries a **`prompt_index`** key — 110 of 118 histories.
+  Fallback for the rest: the first user line whose text contains `<user_query>`. Text lives in
+  `content[]` blocks of type `text`.
+- **The `<user_query>` wrapper is not always closed.** When grok offloads a large prompt it stores a
+  ~20 KB head plus a pointer to `prompts/prompt_0.txt`, so the stored message has an opening tag and
+  no closing one. Strip the two tags independently or the tag ends up in the label.
+- **`grok -r <id>` resumes from any directory**, and the session stays recorded under the cwd it
+  started in — no directory is created for the resuming cwd. Verified by resuming a `/tmp/a` session
+  from `/tmp/b`: correct recall, exit 0, and on stderr
+  `Session <id> found locally (originally in /tmp/a)`. So `grok -r <id>` is honest advice with no
+  `--cwd`, and a record's cwd is where the session _started_, not everywhere it has run.
+
+### An unapprovable tool request kills the run
+
+The single most expensive headless behaviour found so far, verified on 1.0.4 on 2026-08-17. When the
+model asks for a tool that cannot be approved without a human, the CLI does not refuse the tool — it
+**cancels the entire run**, and still exits 0:
+
+```
+permission_requested   tool_name=run_terminal_command
+permission_resolved    tool_name=run_terminal_command  decision=cancelled  wait_ms=0
+turn_ended             outcome=cancelled  cancellation_category=permission_cancelled
+```
+
+The model's tool result reads `"User cancelled the execution for tool run_terminal_command"` — there
+is no user. Across this machine's store, 18 runs died this way: 15 on `run_terminal_command`, 2 on
+`search_replace`, 1 on `use_tool`. `--permission-mode dontAsk` behaves identically (cancelled at
+turn 1), despite the docs describing it as denying rather than prompting.
+
+**An explicit `--deny` rule is recoverable where a permission prompt is fatal.** Same prompt, same
+`--permission-mode plan --sandbox read-only`:
+
+| Flags                                                            | Outcome                                                                                  |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| none                                                             | `stopReason: "cancelled"`, turn 1, no answer                                             |
+| `--deny 'Bash(*)'`                                               | `stopReason: "end_turn"` — _"Could not run it (denied by permission policy); FALLBACK."_ |
+| `--deny 'Bash(*)' 'Edit(*)' 'Write(*)'` (edit + shell asked for) | `end_turn` in 3 turns, file unchanged, both refusals reported and the answer finished    |
+
+So a read-only agent should be given deny rules for what it must not do, not merely a permission
+mode that will refuse it. Plan mode alone looks equivalent and is not.
+
+Two consequences for our own code, both now implemented: `review` passes
+`--deny 'Bash(*)' 'Edit(*)' 'Write(*)'`, and **no path may report a cut-off run as a finished
+result**. Exit code 0 with a non-`end_turn` stop reason is a fragment, and this is how a review that
+did nothing came back looking successful.
+
+### Prompt offloading is not limited to `--prompt-file`
+
+A large **inline `-p`** prompt is offloaded too. Measured over the same 119 sessions: 95 stored the
+prompt inline (largest 11,185 chars), 22 were offloaded, and every offloaded one stored a ~20,056
+char head plus a pointer the agent must `read_file`. The threshold sits somewhere between those two
+figures; it was not worth spending runs to pin down exactly.
+
+The practical point is that `INLINE_PROMPT_MAX_BYTES` (64 KiB) protects against **E2BIG, not
+offloading**. A 40 KB prompt we pass inline is still split, still costs turns to read back, and the
+model may report the prompt as truncated. Budget turns accordingly for any tool that embeds a diff.
 
 ### Safety flags
 
@@ -463,5 +537,7 @@ child process untouched.
 
 ## Current state
 
-Pre-implementation. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones and acceptance
-criteria.
+M1–M4 are complete: `check`, `help`, `grok`, `review`, and `sessions` all ship, with progress
+streaming, structured review findings, and session listing backed by the CLI's own on-disk store.
+`websearch`, `status`, and `stop` remain. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones
+and acceptance criteria.
