@@ -18,6 +18,7 @@ export default defineConfig([
             'eslint.config.js',
             'tests/fixtures/fake-grok.mjs',
             'tests/fixtures/git-repo.mjs',
+            'tests/fixtures/sessions-store.mjs',
           ],
         },
         tsconfigRootDir: import.meta.dirname,

@@ -160,6 +160,28 @@ describe('loadConfig state dir', () => {
   });
 });
 
+describe('loadConfig sessions dir', () => {
+  it('defaults to $HOME/.grok/sessions', () => {
+    assert.equal(loadConfig(env()).sessionsDir, '/home/tester/.grok/sessions');
+  });
+
+  it('prefers GROK_HOME over HOME', () => {
+    const config = loadConfig(env({ GROK_HOME: '/opt/grok-home' }));
+    assert.equal(config.sessionsDir, '/opt/grok-home/sessions');
+  });
+
+  it('falls back to the OS home when the environment carries no HOME', () => {
+    const config = loadConfig({});
+    assert.equal(config.sessionsDir, path.join(os.homedir(), '.grok', 'sessions'));
+  });
+
+  it('resolves a relative GROK_HOME to an absolute sessions dir', () => {
+    const config = loadConfig(env({ GROK_HOME: 'rel-grok' }));
+    assert.ok(path.isAbsolute(config.sessionsDir));
+    assert.ok(config.sessionsDir.endsWith(`${path.sep}rel-grok${path.sep}sessions`));
+  });
+});
+
 describe('loadConfig structuredContent', () => {
   it('is off unless asked for', () => {
     assert.equal(loadConfig(env()).structuredContentEnabled, false);

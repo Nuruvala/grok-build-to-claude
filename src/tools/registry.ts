@@ -12,8 +12,15 @@ import { checkTool } from './handlers/check.js';
 import { grokTool } from './handlers/grok.js';
 import { helpTool } from './handlers/help.js';
 import { reviewTool } from './handlers/review.js';
+import { sessionsTool } from './handlers/sessions.js';
 
-const TOOLS: readonly AnyToolDefinition[] = [checkTool, grokTool, reviewTool, helpTool];
+const TOOLS: readonly AnyToolDefinition[] = [
+  checkTool,
+  grokTool,
+  reviewTool,
+  sessionsTool,
+  helpTool,
+];
 
 const BY_NAME = new Map<string, AnyToolDefinition>(TOOLS.map((tool) => [tool.name, tool]));
 

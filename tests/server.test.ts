@@ -76,12 +76,12 @@ describe('MCP protocol', () => {
     assert.ok(client.getServerCapabilities()?.tools);
   });
 
-  it('lists check, grok, review, and help with a description and a valid object input schema each', async () => {
+  it('lists check, grok, review, sessions, and help with a description and a valid object input schema each', async () => {
     const { tools } = await client.listTools();
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ['check', 'grok', 'review', 'help'],
+      ['check', 'grok', 'review', 'sessions', 'help'],
     );
 
     for (const tool of tools) {
@@ -112,6 +112,7 @@ describe('MCP protocol', () => {
     assert.match(block.text, /grok version:\s+grok 1\.0\.0 \(fake\) \[test\]/);
     assert.match(block.text, /authenticated:\s+yes/);
     assert.match(block.text, /models:\s+grok-4\.6/);
+    assert.match(block.text, /sessions dir:/);
   });
 
   it('returns metadata on the content block, not structuredContent by default', async () => {

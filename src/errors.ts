@@ -13,6 +13,7 @@ export type ErrorKind =
   | 'binary-not-found'
   | 'grok-failed'
   | 'git-failed'
+  | 'sessions-store'
   | 'timeout'
   | 'internal';
 
@@ -121,6 +122,27 @@ export class GitError extends GrokMcpError {
       ...(options.cause === undefined ? {} : { cause: options.cause }),
     });
     this.name = 'GitError';
+  }
+}
+
+/**
+ * The session store root could not be read. ENOENT is not this error — that is
+ * "no sessions yet". Anything else (EACCES, ENOTDIR) is, and the remedy names
+ * the directory so the caller can fix the path rather than retry the same call.
+ */
+export class SessionsStoreError extends GrokMcpError {
+  constructor(sessionsDir: string, options: { cause?: unknown; code?: string | undefined } = {}) {
+    const details: Record<string, unknown> = { sessionsDir };
+    if (options.code !== undefined) details['code'] = options.code;
+
+    super('sessions-store', `Could not read the Grok session store at ${sessionsDir}.`, {
+      remedy:
+        `Check that ${sessionsDir} is a readable directory, or set GROK_HOME to the directory ` +
+        'that contains the sessions/ folder.',
+      details,
+      ...(options.cause === undefined ? {} : { cause: options.cause }),
+    });
+    this.name = 'SessionsStoreError';
   }
 }
 

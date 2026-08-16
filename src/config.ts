@@ -37,6 +37,11 @@ export interface Config {
   readonly defaultPermission: PermissionLevel;
   /** Directory for background job records. */
   readonly stateDir: string;
+  /**
+   * On-disk Grok session store (`$GROK_HOME/sessions`). Read by the sessions
+   * tool; not a `GROK_MCP_*` setting — GROK_HOME is Grok's own.
+   */
+  readonly sessionsDir: string;
   /** Some clients mishandle `structuredContent`, so it is opt-in. */
   readonly structuredContentEnabled: boolean;
 }
@@ -111,6 +116,18 @@ function defaultStateDir(env: Env): string {
 }
 
 /**
+ * `$GROK_HOME/sessions`, else `$HOME/.grok/sessions`. Resolved absolute so a
+ * relative GROK_HOME cannot make two calls look at different stores depending
+ * on the server's cwd.
+ */
+function defaultSessionsDir(env: Env): string {
+  const grokHome = trimmed(env, 'GROK_HOME');
+  const home = trimmed(env, 'HOME') ?? os.homedir();
+  const root = grokHome ?? path.join(home, '.grok');
+  return path.resolve(path.join(root, 'sessions'));
+}
+
+/**
  * Build a validated config.
  *
  * @throws {ConfigError} listing every problem found, not just the first — one restart should be
@@ -148,6 +165,7 @@ export function loadConfig(env: Env = process.env): Config {
     permissionCeiling,
     defaultPermission,
     stateDir: defaultStateDir(env),
+    sessionsDir: defaultSessionsDir(env),
     structuredContentEnabled: parseBoolean(env, 'STRUCTURED_CONTENT_ENABLED'),
   };
 
