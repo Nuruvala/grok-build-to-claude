@@ -1,0 +1,275 @@
+# Roadmap
+
+Milestones for `grok-build-mcp-server`. Each milestone is independently shippable and ends in a
+state where `npm test` passes and the server can be registered with `claude mcp add`.
+
+Background and verified CLI facts live in [CLAUDE.md](CLAUDE.md).
+
+---
+
+## M0 — Scaffold
+
+Get a valid, empty-but-running MCP server into the repo.
+
+**Deliverables**
+
+- `package.json` — ESM, Node >= 22, bin `grok-build-mcp-server`, deps limited to
+  `@modelcontextprotocol/sdk` and `zod`.
+- `tsconfig.json` (strict, `NodeNext`), `eslint.config.js`, `.prettierrc`, `.gitignore`,
+  `.editorconfig`.
+- Test setup: `node --test` with `tsx` as the loader. `npm test` runs
+  `node --import tsx --test tests/**/*.test.ts`; coverage via `--experimental-test-coverage`.
+- `src/index.ts` + `src/server.ts`: stdio transport, `tools/list` returning `check` only,
+  `tools/call` dispatching through a handler registry, error envelope that returns `isError: true`
+  with readable text instead of throwing.
+- `src/config.ts`: env parsing with defaults, exported as a frozen object. Parses and validates
+  `GROK_MCP_PERMISSION_CEILING` / `GROK_MCP_DEFAULT_PERMISSION` at startup — an unknown level, or a
+  default above the ceiling, fails fast on stderr rather than degrading at call time.
+- `LICENSE` — MIT, "Copyright (c) 2026 Jorge Montero". README skeleton, NOTICE if any third-party
+  text is carried.
+- `.github/workflows/ci.yml`: typecheck + lint + format + build + test on Node 22/24/26, Linux and
+  macOS. Node 20 reached end of life on 2026-04-30, so the floor is 22.
+
+**Acceptance**
+
+- `npm run build && node dist/index.js` speaks MCP over stdio; an SDK client completes `initialize`
+  and `tools/list`.
+- Nothing is ever written to stdout outside the transport.
+
+**Status: complete.** 38 tests passing. `check` is live; protocol tests drive the built server over
+a real stdio pipe with the SDK client, and CI asserts stdout purity against the real process.
+
+---
+
+## M1 — Core execution: `check`, `grok`, `help`
+
+The load-bearing milestone. Everything later is a variation on this path.
+
+**Deliverables**
+
+- `src/grok/binary.ts` — resolve `GROK_BINARY` or `grok` on PATH; `grok version` probe with
+  `--version` fallback; auth probe via `grok models` (exit 0 = logged in), classifying `ENOENT`,
+  non-zero exit, and success distinctly.
+- `src/grok/exec.ts` — `spawn(binary, argv)`, never `shell: true` on POSIX; stdin closed
+  immediately; 10 MB caps per stream with a truncation marker; `GROK_MCP_TIMEOUT_MS` wall clock
+  enforced with SIGTERM then SIGKILL against the process group.
+- `src/grok/args.ts` — pure argv builder. Handles prompt, `--cwd`, `--model`, `--effort`,
+  `--permission-mode`, `--sandbox`, `--max-turns`, `--tools`, `--disallowed-tools`, repeatable
+  `--allow`/`--deny`, `--rules`, `--agent`, and the mutually exclusive session flags (`-r` / `-c` /
+  `-s`).
+- `src/grok/result.ts` — parse `--output-format json` into
+  `{ text, sessionId, stopReason, requestId, usage, totalCostUsd, modelUsage }`; recognize the
+  `{"type":"error"}` shape and surface `message` as the tool error.
+- Tools: `check`, `help`, and `grok` (synchronous, `--output-format json`).
+- `src/permission.ts` — the ceiling model from CLAUDE.md rules 1 and 2. Resolves (requested level,
+  default, ceiling) to a concrete `--permission-mode` / `--sandbox` pair, or to a typed rejection
+  naming the env var. `check` reports the active ceiling and default.
+- `tests/fixtures/fake-grok.mjs` — scriptable fake binary that records argv and replays canned
+  stdout/exit codes.
+
+**Acceptance**
+
+- `grok` tool returns the model's text, with `sessionId`, `model`, `usage`, and `total_cost_usd` on
+  `content[0]._meta`.
+- Table-driven argv tests cover every flag and every mutually exclusive combination.
+- Killing a run mid-flight leaves no orphaned `grok` process (verified with a sleeping fake).
+- A prompt containing quotes, newlines, `$VAR`, and backticks reaches the child verbatim.
+- Ceiling matrix: all nine (requested × ceiling) combinations resolve as specified, and the three
+  over-ceiling cases reject with the env var named. No case silently clamps.
+- With ceiling and default both `full`, a bare `grok` call with no permission argument emits
+  `--always-approve` and never rejects — the unattended path is exercised in CI, not assumed.
+
+**Reliability acceptance** (from CLAUDE.md "Why this exists" — each maps to a named plugin failure)
+
+- A fake that emits 50 MB is capped at 10 MB per stream with a truncation marker, and the process
+  stays under a bounded RSS.
+- A fake that never exits is killed at `GROK_MCP_TIMEOUT_MS` and returns the output buffered so far,
+  not an empty error.
+- A fake that writes partial output then exits non-zero returns that partial output alongside the
+  error message.
+- A fake that emits `{"type":"error"}` surfaces `message` as the tool error, with no attempt to
+  parse a result out of it.
+- The returned `sessionId` is always the one the CLI reported. No test passes with a locally
+  generated UUID.
+
+---
+
+## M2 — Progress streaming
+
+Stop MCP clients from timing out on multi-minute agent runs.
+
+**Deliverables**
+
+- `src/grok/stream.ts` — incremental NDJSON reader for `--output-format streaming-json`. Must handle
+  chunk boundaries mid-line, blank lines, and unknown `type` values without throwing.
+- Event-to-progress mapping: `tool_call` → `Read src/main.rs`-style one-liners, `thought` →
+  truncated reasoning, `text` → response text, `end` → final metadata. Debounce to ~100 ms.
+- The `grok` handler switches to streaming when the request carried a `progressToken`, and
+  reconstructs the same result object from the terminal `end` event that the `json` path produces.
+
+**Acceptance**
+
+- A five-minute fake run streams progress and does not trip the client timeout.
+- Streaming and non-streaming paths produce byte-identical result metadata for the same fake
+  transcript.
+- A truncated / mid-line-killed stream still yields a usable partial result rather than a parse
+  crash.
+- Progress tracks real work, not lifecycle: a fake transcript containing 12 `tool_call` events
+  produces 12 distinct progress messages. Two phase strings for a ten-minute run is the failure
+  being fixed.
+
+---
+
+## M3 — `review`
+
+**Deliverables**
+
+- Git target selection: `uncommitted` (working tree, staged + unstaged + untracked), `base <ref>`
+  (merge-base diff), `commit <sha>`. Auto-detect when unspecified: branch diff if the branch has
+  commits off `base`, otherwise working tree.
+- Diff collection in-process (`git diff`, `git status --porcelain`, `git log`), with a size cap and
+  explicit truncation notice, embedded into the review prompt so the model does not have to burn
+  turns rediscovering the target.
+- Forced `read-only` regardless of the configured ceiling — a review that edits the code it is
+  reviewing is never wanted. Requesting a higher level on this tool rejects.
+- Optional `structured: true` → `--json-schema` with a findings schema (`severity`, `file`, `line`,
+  `summary`, `rationale`), parsed and returned as JSON.
+- `annotations: { readOnlyHint: true, destructiveHint: false }` on the tool definition.
+
+**Acceptance**
+
+- Each target mode produces the right diff on a scratch fixture repo (empty repo, detached HEAD, no
+  upstream, submodule present).
+- `structured: true` returns parsed findings; malformed model JSON degrades to raw text plus a
+  `parseError` field rather than failing the call.
+
+---
+
+## M4 — Sessions
+
+**Deliverables**
+
+- `sessions` tool backed by `grok sessions list|search` — real, persistent sessions, not an
+  in-process map.
+- Resume ergonomics on the `grok` tool: `resume: "<id>"`, `continue: true`, and `fork: true`
+  (`--fork-session`). Enforce the CLI's real constraints: `-s` is create-only and requires a fresh
+  UUID; with `-r`/`-c` it is only valid alongside `--fork-session`.
+- Return `resumeCommand: "grok -r <id>"` in metadata so a human can pick the thread up in a
+  terminal.
+
+**Acceptance**
+
+- Two sequential `grok` calls sharing a `resume` id demonstrably share context (integration test
+  behind `GROK_MCP_E2E=1`).
+- Invalid session combinations are rejected by us with an actionable message before the CLI is
+  spawned.
+- A session id returned by a `grok` call is findable via the `sessions` tool immediately afterward.
+  A reported id that does not exist in `~/.grok/sessions` is a test failure — this is the plugin's
+  "session id that does not resume" bug.
+
+---
+
+## M5 — Background runs: `status`, `stop`
+
+Where this server surpasses `codex-mcp-server`, which is synchronous-only.
+
+**Deliverables**
+
+- `background: true` on `grok` and `review` returns a `runId` immediately.
+- `src/jobs/store.ts` — atomic on-disk run records under `GROK_MCP_STATE_DIR`: id, state, argv, cwd,
+  both PIDs (worker and `grok` child), start/end timestamps, output log path. Records survive an MCP
+  server restart.
+- `src/jobs/runner.ts` — detached worker that streams the run to a log file and writes the terminal
+  record.
+- `status` tool: poll one run or list recent runs; optional `waitMs` to block briefly.
+- `stop` tool: terminate the whole process tree, worker and child; claim the terminal state under a
+  lock so a finishing worker cannot overwrite `cancelled` with `completed`.
+
+**Acceptance**
+
+- Restarting the MCP server mid-run leaves `status` still able to report and `stop` still able to
+  kill.
+- Concurrent `stop` and natural completion resolve to exactly one terminal state.
+- Two concurrent background runs in the same repo do not clobber each other's records.
+
+---
+
+## M6 — `websearch`
+
+**Deliverables**
+
+- Web-search-shaped prompt with `numResults` (1–50) and `searchDepth` (`basic` | `full`).
+- Read-only defaults; never pass `--disable-web-search`.
+- Surface `server_tool_use.web_search_requests` from the result usage when present.
+
+**Acceptance**
+
+- Returns cited results in an integration test; degrades with a clear message when the account has
+  web search disabled.
+
+---
+
+## M7 — Public release
+
+**Deliverables**
+
+- `README.md`: architecture diagram, quick start
+  (`claude mcp add grok-build -- npx -y grok-build-mcp-server`), tool table, one-click install
+  badges for VS Code / Cursor, requirements (grok >= 1.0.0, Node >= 20), env var table.
+- `docs/api-reference.md` — full parameter and response reference per tool.
+- `docs/security.md` — the permission ceiling model, why the grant is registration-time rather than
+  per-call, what `full` actually authorizes, sandbox caveats (Linux-only child-network blocking),
+  and what an operator is trusting when they register this server.
+- npm publish workflow on tag; provenance enabled.
+- `CHANGELOG.md`, issue and PR templates.
+
+**Acceptance**
+
+- A clean machine can go from zero to a working tool call using only the README.
+- `npx -y grok-build-mcp-server` works from the published tarball (`files` includes `dist` only).
+
+---
+
+## Deferred / evaluated and rejected
+
+- **`grok import` transfer of Claude transcripts** — the subcommand does not exist in grok 1.0.0
+  despite the bundled plugin calling it. If transcript transfer is wanted later, read the Claude
+  `.jsonl` ourselves and pass it via `--prompt-file`.
+- **`grok agent stdio` (ACP) as the transport** — a richer, bidirectional interface that would allow
+  interactive tool approval instead of pre-committed permission modes. Far larger surface than `-p`.
+  Revisit only if approval-in-the-loop becomes a requirement.
+- **`--worktree` isolation** — attractive for safe write runs, but headless `-p` does not create a
+  worktree from the flag. Would need `grok worktree` orchestration first.
+- **Critique tool** (the plugin's `/grok-build:critique`) — a prompt variant of `review`. Fold in as
+  a `mode: "critique"` parameter on `review` rather than a separate tool, if wanted.
+
+---
+
+## Open decisions
+
+| Decision             | Recommendation                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~License~~          | **Resolved: MIT.**                                                                                                                                      |
+| ~~npm package name~~ | **Resolved: `grok-build-mcp-server`.** Verified unclaimed on 2026-08-16 (E404). Unrelated `grok-mcp-server@0.2.4` already exists — do not use that name |
+| ~~Default model~~    | **Resolved: `grok-4.6`, effort `high`.** Overridable via `GROK_MCP_DEFAULT_MODEL` / `GROK_MCP_DEFAULT_EFFORT`                                           |
+| ~~Test runner~~      | **Resolved: `node --test` + `tsx`.** See below                                                                                                          |
+
+### Why `node --test` over Jest
+
+Jest's strengths are module auto-mocking, snapshots, and watch UX. This project uses none of them —
+our test strategy is a **fake `grok` binary on `PATH`** plus table-driven assertions on a pure argv
+builder. Nothing gets module-mocked, so Jest's main advantage does not apply.
+
+Against that, the costs are real:
+
+- **Dependency weight on a repo whose whole thesis is being thin.** CLAUDE.md limits runtime deps to
+  the MCP SDK and zod. Jest adds a large dev tree; `node --test` adds nothing.
+- **ESM + TypeScript friction.** Jest needs `ts-jest` or `babel-jest` plus
+  `NODE_OPTIONS=--experimental-vm-modules` to run native ESM. This repo is `"type": "module"` with
+  `NodeNext` resolution — exactly the configuration that combination handles worst.
+- **Contributor onboarding on a public repo.** `git clone && npm i && npm test` with no transform
+  layer to misconfigure.
+
+`node:test` is stable from Node 20, which is already the floor, and ships subtests, concurrency,
+watch, and coverage. If a richer runner is ever wanted, **vitest** is the one to reach for — native
+ESM/TS, Jest-compatible API — not Jest.
