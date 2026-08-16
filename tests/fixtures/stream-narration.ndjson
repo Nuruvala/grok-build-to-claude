@@ -1,0 +1,2 @@
+{"type":"text","data":"Hello"}
+{"type":"end","stopReason":"end_turn","sessionId":"00000000-0000-7000-8000-000000000030","requestId":"00000000-0000-4000-8000-000000000031","usage":{"input_tokens":8,"output_tokens":1,"total_tokens":9},"num_turns":1,"total_cost_usd":0.001,"modelUsage":{"fake-model-build":{"costUSD":0.001}}}

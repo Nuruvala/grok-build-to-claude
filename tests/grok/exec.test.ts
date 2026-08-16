@@ -321,6 +321,34 @@ describe('execGrok settles once', () => {
   });
 });
 
+describe('execGrok UTF-8 decoding across chunk boundaries', () => {
+  it('reassembles a multi-byte character split across two writes in onStdout, rather than handing the caller replacement characters', async () => {
+    // Must match the literal in tests/fixtures/fake-grok.mjs under FAKE_GROK_SPLIT_UTF8.
+    const original = 'ok café — 日本語 ✓';
+    const chunks: string[] = [];
+    const result = await execFake(
+      { FAKE_GROK_SPLIT_UTF8: '1' },
+      {
+        timeoutMs: 2000,
+        onStdout: (chunk) => {
+          chunks.push(chunk);
+        },
+      },
+    );
+
+    assert.equal(result.outcome, 'exited');
+    const reassembled = chunks.join('');
+    assert.equal(reassembled.includes('\uFFFD'), false);
+    assert.equal(reassembled, original);
+    // The final `stdout` field already concatenated Buffers correctly before this
+    // fix. The callback path is what the JSON parser now consumes.
+    assert.ok(
+      chunks.length >= 2,
+      `expected at least two onStdout callbacks so the split is observed, got ${String(chunks.length)}: ${JSON.stringify(chunks)}`,
+    );
+  });
+});
+
 describe('execGrok stream callbacks', () => {
   it('forwards decoded stdout and stderr chunks so a streaming caller can observe the run', async () => {
     const stdout: string[] = [];

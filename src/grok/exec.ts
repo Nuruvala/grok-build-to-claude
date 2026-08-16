@@ -8,6 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 import { log } from '../log.js';
 
@@ -58,6 +59,11 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
     const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
     const stdoutBuf = createCappedBuffer(maxBufferBytes);
     const stderrBuf = createCappedBuffer(maxBufferBytes);
+    // Incremental decoders so a multi-byte character split across two `data`
+    // events is not handed to onStdout as U+FFFD. The capped buffer still takes
+    // raw Buffers — its cap is a byte cap and must stay byte-exact.
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
 
     let settled = false;
     let spawned = false;
@@ -84,6 +90,12 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
     function finish(code: number | null, signal: NodeJS.Signals | null): void {
       if (settled) return;
       settled = true;
+      // Flush here rather than on `end` so a killed child whose pipes never
+      // reach EOF still yields a trailing partial character instead of dropping it.
+      const stdoutTail = stdoutDecoder.end();
+      if (stdoutTail !== '') options.onStdout?.(stdoutTail);
+      const stderrTail = stderrDecoder.end();
+      if (stderrTail !== '') options.onStderr?.(stderrTail);
       cleanup();
       resolve(
         Object.freeze({
@@ -167,13 +179,13 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
 
     child.stdout?.on('data', (chunk: unknown) => {
       const data = asBuffer(chunk);
-      options.onStdout?.(data.toString('utf8'));
+      options.onStdout?.(stdoutDecoder.write(data));
       stdoutBuf.push(data);
     });
 
     child.stderr?.on('data', (chunk: unknown) => {
       const data = asBuffer(chunk);
-      options.onStderr?.(data.toString('utf8'));
+      options.onStderr?.(stderrDecoder.write(data));
       stderrBuf.push(data);
     });
 

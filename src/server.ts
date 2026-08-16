@@ -41,10 +41,12 @@ export function createServer(config: Config): Server {
       const { name, arguments: args } = request.params;
       const started = Date.now();
 
+      const progressToken = extra._meta?.progressToken;
       const context: ToolContext = {
         config,
         signal: extra.signal,
-        reportProgress: makeProgressReporter(extra),
+        reportProgress: makeProgressReporter(extra, progressToken),
+        progressRequested: progressToken !== undefined,
       };
 
       try {
@@ -86,8 +88,10 @@ interface ProgressCapableExtra {
  * failed notification is logged and swallowed — losing a progress update must not fail the run
  * that produced it.
  */
-function makeProgressReporter(extra: ProgressCapableExtra): (update: ProgressUpdate) => void {
-  const progressToken = extra._meta?.progressToken;
+function makeProgressReporter(
+  extra: ProgressCapableExtra,
+  progressToken: string | number | undefined,
+): (update: ProgressUpdate) => void {
   if (progressToken === undefined) {
     return () => {
       /* client did not ask for progress */

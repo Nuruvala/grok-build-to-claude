@@ -11,7 +11,7 @@
 
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
-import { write as writeCallback, writeFileSync, writeSync } from 'node:fs';
+import { readFileSync, write as writeCallback, writeFileSync, writeSync } from 'node:fs';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -64,6 +64,22 @@ if (cannedStdout) {
 const cannedStderr = process.env['FAKE_GROK_STDERR'];
 if (cannedStderr) {
   writeSync(2, cannedStderr);
+}
+
+// Must match the literal in tests/grok/exec.test.ts. Split after the first byte
+// of `é` (C3 A9) so a per-chunk UTF-8 decode would inject U+FFFD.
+if (process.env['FAKE_GROK_SPLIT_UTF8']) {
+  const bytes = Buffer.from('ok café — 日本語 ✓', 'utf8');
+  const eAcute = bytes.indexOf(0xc3);
+  const at = eAcute === -1 ? 1 : eAcute + 1;
+  writeSync(1, bytes.subarray(0, at));
+  await delay(30);
+  writeSync(1, bytes.subarray(at));
+}
+
+const streamFile = process.env['FAKE_GROK_STREAM_FILE'];
+if (streamFile) {
+  await writeStreamFile(streamFile);
 }
 
 const stdoutBytes = Number(process.env['FAKE_GROK_STDOUT_BYTES']);
@@ -128,4 +144,50 @@ function writeFd(fd, buffer) {
 function isAgain(error) {
   const message = error instanceof Error ? error.message : '';
   return message.startsWith('EAGAIN') || message.startsWith('EWOULDBLOCK');
+}
+
+/**
+ * Write an NDJSON transcript line by line. Optional delay and mid-line split
+ * exercise the parent's decoder and NDJSON reader across real chunk boundaries.
+ *
+ * @param {string} filePath
+ */
+async function writeStreamFile(filePath) {
+  const contents = readFileSync(filePath);
+  const delayMs = Number(process.env['FAKE_GROK_STREAM_DELAY_MS']);
+  const split = Boolean(process.env['FAKE_GROK_STREAM_SPLIT']);
+  const lines = splitBufferLines(contents);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (i > 0 && Number.isFinite(delayMs) && delayMs > 0) {
+      await delay(delayMs);
+    }
+    const line = lines[i];
+    if (line === undefined) continue;
+    if (split && line.length >= 2) {
+      const at = Math.floor(line.length / 2);
+      writeSync(1, line.subarray(0, at));
+      writeSync(1, line.subarray(at));
+    } else {
+      writeSync(1, line);
+    }
+  }
+}
+
+/**
+ * @param {Buffer} buf
+ * @returns {Buffer[]}
+ */
+function splitBufferLines(buf) {
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < buf.length; i += 1) {
+    if (buf[i] === 0x0a) {
+      lines.push(buf.subarray(start, i + 1));
+      start = i + 1;
+    }
+  }
+  if (start < buf.length) {
+    lines.push(buf.subarray(start));
+  }
+  return lines;
 }

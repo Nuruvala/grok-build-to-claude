@@ -1,0 +1,8 @@
+{"type":"tool_call","toolCallId":"call-0","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"a"},"content":[],"locations":[{"path":"a"}]}
+{"type":"tool_call","toolCallId":"call-1","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"b"},"content":[],"locations":[{"path":"b"}]}
+{"type":"tool_call","toolCallId":"call-2","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"c"},"content":[],"locations":[{"path":"c"}]}
+{"type":"tool_call","toolCallId":"call-3","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"d"},"content":[],"locations":[{"path":"d"}]}
+{"type":"tool_call","toolCallId":"call-4","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"e"},"content":[],"locations":[{"path":"e"}]}
+{"type":"tool_call","toolCallId":"call-5","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"f"},"content":[],"locations":[{"path":"f"}]}
+{"type":"tool_call","toolCallId":"call-6","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"g"},"content":[],"locations":[{"path":"g"}]}
+{"type":"end","stopReason":"end_turn","sessionId":"00000000-0000-7000-8000-000000000020","requestId":"00000000-0000-4000-8000-000000000021","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12},"num_turns":1,"total_cost_usd":0.001,"modelUsage":{"fake-model-build":{"costUSD":0.001}}}

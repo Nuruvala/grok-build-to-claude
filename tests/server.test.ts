@@ -152,6 +152,105 @@ describe('MCP protocol', () => {
   });
 });
 
+describe('grok streaming progress over stdio', () => {
+  const streamHappy = path.join(REPO_ROOT, 'tests', 'fixtures', 'stream-happy.ndjson');
+  const streamSlow = path.join(REPO_ROOT, 'tests', 'fixtures', 'stream-slow.ndjson');
+
+  it('delivers progress notifications to the SDK client through the real transport', async () => {
+    const { client, close } = await connect({
+      FAKE_GROK_STDOUT: '',
+      FAKE_GROK_STREAM_FILE: streamHappy,
+      FAKE_GROK_STREAM_SPLIT: '1',
+    });
+
+    try {
+      const seen: { progress: number; message?: string }[] = [];
+      const result = await client.callTool(
+        { name: 'grok', arguments: { prompt: 'go' } },
+        undefined,
+        {
+          onprogress: (update) => {
+            seen.push({
+              progress: update.progress,
+              ...(update.message === undefined ? {} : { message: update.message }),
+            });
+          },
+        },
+      );
+
+      assert.notEqual(result.isError, true);
+      assert.ok(seen.length > 0, 'expected at least one progress notification to reach the client');
+      assert.ok(
+        seen.some((entry) => entry.message !== undefined && entry.message !== ''),
+        `expected a progress message, got ${JSON.stringify(seen)}`,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it('keeps a slow run alive when the client resets its timeout on progress', async () => {
+    const { client, close } = await connect({
+      FAKE_GROK_STDOUT: '',
+      FAKE_GROK_STREAM_FILE: streamSlow,
+      FAKE_GROK_STREAM_DELAY_MS: '400',
+      GROK_MCP_TIMEOUT_MS: '15000',
+    });
+
+    try {
+      const result = await client.callTool(
+        { name: 'grok', arguments: { prompt: 'go' } },
+        undefined,
+        {
+          onprogress: () => {
+            /* reset is what we are proving; the callback itself can be empty */
+          },
+          // Three times the 400 ms gap between lines. The reset test fails only if a single gap
+          // stretches past this, so the margin is deliberately wide — a 2x margin is what made an
+          // earlier timing test in this repo flake.
+          timeout: 1200,
+          resetTimeoutOnProgress: true,
+        },
+      );
+      assert.notEqual(result.isError, true);
+    } finally {
+      await close();
+    }
+  });
+
+  it('times out the same slow run when the client does not reset on progress', async () => {
+    const { client, close } = await connect({
+      FAKE_GROK_STDOUT: '',
+      FAKE_GROK_STREAM_FILE: streamSlow,
+      FAKE_GROK_STREAM_DELAY_MS: '400',
+      GROK_MCP_TIMEOUT_MS: '15000',
+    });
+
+    try {
+      await assert.rejects(
+        () =>
+          client.callTool({ name: 'grok', arguments: { prompt: 'go' } }, undefined, {
+            onprogress: () => {
+              /* still request progress so the handler takes the streaming path */
+            },
+            // Three times the 400 ms gap between lines. The reset test fails only if a single gap
+            // stretches past this, so the margin is deliberately wide — a 2x margin is what made an
+            // earlier timing test in this repo flake.
+            timeout: 1200,
+            resetTimeoutOnProgress: false,
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /timed out/i);
+          return true;
+        },
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe('configuration reaches the running server', () => {
   it('reflects an unattended ceiling in check output', async () => {
     const { client, close } = await connect({

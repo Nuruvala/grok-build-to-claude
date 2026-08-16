@@ -1,0 +1,8 @@
+{"type":"thought","data":"Looking at the "}
+{"type":"tool_call","toolCallId":"call-0","title":"list_dir","kind":"list","status":"pending","toolName":"list_dir","rawInput":{"target_directory":"."},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-0","status":null,"locations":[{"path":"."}],"content":[],"rawOutput":{}}
+{"type":"tool_call_update","toolCallId":"call-0","status":"completed","locations":[],"content":[],"rawOutput":{}}
+{"type":"text","data":"Here"}
+{"type":"text","data":" you go"}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":10},"signature":"c2lnCg=="}
+{"type":"end","stopReason":"end_turn","sessionId":"00000000-0000-7000-8000-000000000001","requestId":"00000000-0000-4000-8000-000000000002","usage":{"input_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":10,"reasoning_tokens":5,"total_tokens":115},"num_turns":1,"total_cost_usd":0.001,"total_cost_usd_ticks":10000,"modelUsage":{"fake-model-build":{"costUSD":0.001}}}

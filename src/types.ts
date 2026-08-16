@@ -42,6 +42,11 @@ export interface ToolContext {
    * `progressToken`, so handlers can call it unconditionally.
    */
   readonly reportProgress: (update: ProgressUpdate) => void;
+  /**
+   * True when the client sent a `progressToken`, so `reportProgress` reaches someone. Handlers use
+   * this to choose a more expensive observable execution path only when it will be observed.
+   */
+  readonly progressRequested: boolean;
 }
 
 /**

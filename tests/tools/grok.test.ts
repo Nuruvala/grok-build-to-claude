@@ -13,9 +13,14 @@ import { permissionFlags } from '../../src/permission.js';
 import { grokTool } from '../../src/tools/handlers/grok.js';
 import { helpTool } from '../../src/tools/handlers/help.js';
 import { invokeTool } from '../../src/tools/registry.js';
-import type { ToolContext, ToolResult } from '../../src/types.js';
+import type { ProgressUpdate, ToolContext, ToolResult } from '../../src/types.js';
 
 const FAKE_GROK = fileURLToPath(new URL('../fixtures/fake-grok.mjs', import.meta.url));
+const FIXTURES = fileURLToPath(new URL('../fixtures', import.meta.url));
+
+function fixturePath(name: string): string {
+  return path.join(FIXTURES, name);
+}
 
 const REPORTED_SESSION = '7c3e91a2-4b18-6fa0-9d21-e8bb0c4d2a71';
 const PASSED_SESSION = '11111111-2222-3333-4444-555555555555';
@@ -69,17 +74,26 @@ function isolatedConfig(overrides: Record<string, string> = {}): Config {
   });
 }
 
+interface CtxExtras {
+  readonly progressRequested?: boolean;
+  readonly reportProgress?: (update: ProgressUpdate) => void;
+}
+
 function ctxFor(
   binary: string,
   overrides: Record<string, string> = {},
   signal?: AbortSignal,
+  extras: CtxExtras = {},
 ): ToolContext {
   return {
     config: isolatedConfig({ GROK_BINARY: binary, ...overrides }),
     signal: signal ?? new AbortController().signal,
-    reportProgress: () => {
-      /* protocol tests cover progress separately */
-    },
+    reportProgress:
+      extras.reportProgress ??
+      (() => {
+        /* protocol tests cover progress separately */
+      }),
+    progressRequested: extras.progressRequested ?? false,
   };
 }
 
@@ -88,13 +102,44 @@ async function runGrok(
   script: Record<string, string> = {},
   env: Record<string, string> = {},
   signal?: AbortSignal,
+  extras: CtxExtras = {},
 ): Promise<{ result: ToolResult; argvFile: string }> {
   const { binary, argvFile } = await installFake({
     FAKE_GROK_STDOUT: SUCCESS_JSON,
     ...script,
   });
-  const result = await grokTool.handler(input, ctxFor(binary, env, signal));
+  const result = await grokTool.handler(input, ctxFor(binary, env, signal, extras));
   return { result, argvFile };
+}
+
+async function runStreaming(
+  streamFile: string,
+  script: Record<string, string> = {},
+  extras: CtxExtras = {},
+): Promise<{ result: ToolResult; argvFile: string; emissions: ProgressUpdate[] }> {
+  const emissions: ProgressUpdate[] = [];
+  const { result, argvFile } = await runGrok(
+    { prompt: 'hi' },
+    {
+      FAKE_GROK_STDOUT: '',
+      FAKE_GROK_STREAM_FILE: streamFile,
+      ...script,
+    },
+    {},
+    undefined,
+    {
+      progressRequested: true,
+      reportProgress: (update) => {
+        emissions.push(update);
+      },
+      ...extras,
+    },
+  );
+  return { result, argvFile, emissions };
+}
+
+function activeTimeouts(): number {
+  return process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length;
 }
 
 async function readArgv(argvFile: string): Promise<unknown> {
@@ -465,5 +510,222 @@ describe('grok tool schema validation', () => {
     const argv = (await readArgv(argvFile)) as string[];
     assert.ok(argv.includes('--cwd'));
     assert.ok(argv.includes('--fork-session'));
+  });
+});
+
+describe('grok output format follows whether the client asked for progress', () => {
+  it('passes --output-format json when progressRequested is false, so a silent client does not pay for a stream', async () => {
+    const { result, argvFile } = await runGrok({ prompt: 'hi' });
+
+    assert.notEqual(result.isError, true);
+    const argv = (await readArgv(argvFile)) as string[];
+    const formatAt = argv.indexOf('--output-format');
+    assert.ok(formatAt >= 0);
+    assert.equal(argv[formatAt + 1], 'json');
+  });
+
+  it('passes --output-format streaming-json when progressRequested is true', async () => {
+    const { result, argvFile } = await runStreaming(fixturePath('stream-happy.ndjson'));
+
+    assert.notEqual(result.isError, true);
+    const argv = (await readArgv(argvFile)) as string[];
+    const formatAt = argv.indexOf('--output-format');
+    assert.ok(formatAt >= 0);
+    assert.equal(argv[formatAt + 1], 'streaming-json');
+  });
+});
+
+describe('grok metadata identity across output formats', () => {
+  it('builds the same _meta from a json object and a streaming transcript of the same values', async () => {
+    const shared = {
+      text: 'Here you go',
+      stopReason: 'end_turn',
+      sessionId: '00000000-0000-7000-8000-000000000001',
+      requestId: '00000000-0000-4000-8000-000000000002',
+      usage: {
+        input_tokens: 100,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens: 10,
+        reasoning_tokens: 5,
+        total_tokens: 115,
+      },
+      num_turns: 1,
+      total_cost_usd: 0.001,
+      modelUsage: { 'fake-model-build': { costUSD: 0.001 } },
+    };
+
+    const jsonStdout = JSON.stringify(shared);
+    const streamDir = await makeTmp();
+    const streamFile = path.join(streamDir, 'identity.ndjson');
+    const { text: _text, ...endFields } = shared;
+    await writeFile(
+      streamFile,
+      [
+        '{"type":"text","data":"Here"}',
+        '{"type":"text","data":" you go"}',
+        JSON.stringify({ type: 'end', ...endFields }),
+        '',
+      ].join('\n'),
+    );
+
+    const jsonRun = await runGrok({ prompt: 'hi' }, { FAKE_GROK_STDOUT: jsonStdout });
+    const streamRun = await runStreaming(streamFile);
+
+    assert.notEqual(jsonRun.result.isError, true);
+    assert.notEqual(streamRun.result.isError, true);
+    assert.equal(textOf(jsonRun.result), shared.text);
+    assert.equal(textOf(streamRun.result), shared.text);
+
+    const jsonMeta = { ...metaOf(jsonRun.result) };
+    const streamMeta = { ...metaOf(streamRun.result) };
+    delete jsonMeta['durationMs'];
+    delete streamMeta['durationMs'];
+    assert.deepEqual(streamMeta, jsonMeta);
+  });
+});
+
+describe('grok streaming progress tracks work, not lifecycle', () => {
+  it('emits at least 12 distinct strictly-increasing progress lines for a 12-tool transcript', async () => {
+    const { result, emissions } = await runStreaming(fixturePath('stream-tools-12.ndjson'));
+
+    assert.notEqual(result.isError, true);
+    assert.ok(
+      emissions.length >= 12,
+      `expected at least 12 emissions, got ${String(emissions.length)}`,
+    );
+    const messages = emissions.map((emission) => emission.message);
+    assert.ok(
+      new Set(messages).size >= 12,
+      `expected at least 12 distinct messages, got ${JSON.stringify(messages)}`,
+    );
+    for (let i = 1; i < emissions.length; i += 1) {
+      const previous = emissions[i - 1]?.progress;
+      const current = emissions[i]?.progress;
+      assert.ok(previous !== undefined && current !== undefined);
+      assert.ok(
+        current > previous,
+        `progress not strictly increasing at ${String(i)}: ${String(previous)} -> ${String(current)}`,
+      );
+    }
+  });
+
+  it('emits pending narration before the finishing line, because a run must not report finished ahead of its own last words', async () => {
+    const { result, emissions } = await runStreaming(fixturePath('stream-narration.ndjson'));
+
+    assert.notEqual(result.isError, true);
+    const messages = emissions.map((emission) => emission.message ?? '');
+    const narrationAt = messages.findIndex((message) => message.startsWith('writing:'));
+    const finishedAt = messages.findIndex((message) => message.startsWith('finished:'));
+
+    assert.ok(narrationAt >= 0, `expected a writing: line, got ${JSON.stringify(messages)}`);
+    assert.ok(finishedAt >= 0, `expected a finished: line, got ${JSON.stringify(messages)}`);
+    assert.ok(
+      narrationAt < finishedAt,
+      `narration must precede the finishing line, got ${JSON.stringify(messages)}`,
+    );
+
+    // The counter has to agree with the delivery order, or a client that sorts by `progress`
+    // re-inverts what the ordering fix just corrected.
+    for (let i = 1; i < emissions.length; i += 1) {
+      const previous = emissions[i - 1]?.progress;
+      const current = emissions[i]?.progress;
+      assert.ok(previous !== undefined && current !== undefined);
+      assert.ok(current > previous, `progress not strictly increasing at ${String(i)}`);
+    }
+  });
+
+  it('flushes debounced narration while the run is still in flight, not only at the end', async () => {
+    const { result, emissions } = await runStreaming(fixturePath('stream-narration.ndjson'), {
+      FAKE_GROK_STREAM_DELAY_MS: '150',
+    });
+
+    assert.notEqual(result.isError, true);
+    const messages = emissions.map((emission) => emission.message ?? '');
+    assert.ok(
+      messages.some((message) => message.startsWith('writing:')),
+      `expected a debounced writing: line, got ${JSON.stringify(messages)}`,
+    );
+  });
+});
+
+describe('grok streaming outcomes', () => {
+  it('reports a truncated stream as a partial error with recovered text and no fabricated session id', async () => {
+    const { result } = await runStreaming(fixturePath('stream-truncated.ndjson'));
+
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /recovered so far/);
+    assert.match(textOf(result), /stream ended before its end event/);
+    assert.equal(metaOf(result)['sessionId'], undefined);
+  });
+
+  it('surfaces a stream whose only content is an error event as the CLI error path', async () => {
+    const { result } = await runStreaming(fixturePath('stream-error.ndjson'));
+
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /grok reported an error: model not found/);
+    assert.equal(metaOf(result)['sessionId'], undefined);
+  });
+});
+
+describe('grok treats a complete result as success even when the process exits 1', () => {
+  const maxTurnsJson = JSON.stringify({
+    text: 'I got as far as listing the files',
+    stopReason: 'cancelled',
+    sessionId: '00000000-0000-7000-8000-000000000003',
+    requestId: '00000000-0000-4000-8000-000000000004',
+    usage: { input_tokens: 50, output_tokens: 8, total_tokens: 58 },
+    num_turns: 1,
+    total_cost_usd: 0.002,
+  });
+
+  it('keeps the parsed text, session id, and spend on the json path when --max-turns exits 1', async () => {
+    const { result } = await runGrok(
+      { prompt: 'hi' },
+      { FAKE_GROK_STDOUT: maxTurnsJson, FAKE_GROK_EXIT_CODE: '1' },
+    );
+
+    assert.notEqual(result.isError, true);
+    assert.match(textOf(result), /I got as far as listing the files/);
+    assert.match(textOf(result), /exited with code 1/);
+    assert.match(textOf(result), /stopReason: cancelled/);
+    assert.equal(metaOf(result)['sessionId'], '00000000-0000-7000-8000-000000000003');
+    assert.equal(metaOf(result)['exitCode'], 1);
+    assert.equal(metaOf(result)['stopReason'], 'cancelled');
+    assert.equal(metaOf(result)['total_cost_usd'], 0.002);
+  });
+
+  it('keeps the parsed text, session id, and spend on the streaming path when max_turns_reached is followed by end and exit 1', async () => {
+    const { result } = await runStreaming(fixturePath('stream-max-turns.ndjson'), {
+      FAKE_GROK_EXIT_CODE: '1',
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.match(textOf(result), /I got as far as listing the files/);
+    assert.match(textOf(result), /exited with code 1/);
+    assert.match(textOf(result), /stopReason: cancelled/);
+    assert.equal(metaOf(result)['sessionId'], '00000000-0000-7000-8000-000000000003');
+    assert.equal(metaOf(result)['exitCode'], 1);
+    assert.equal(metaOf(result)['stopReason'], 'cancelled');
+    assert.equal(metaOf(result)['total_cost_usd'], 0.002);
+  });
+});
+
+describe('grok streaming debounce timer does not leak', () => {
+  it('clears the narration debounce timer when the run resolves, so a stray timeout cannot keep the process alive', async () => {
+    const timeoutsBefore = activeTimeouts();
+    const { result } = await runStreaming(fixturePath('stream-narration.ndjson'));
+
+    assert.notEqual(result.isError, true);
+    const timeoutsAfter = activeTimeouts();
+    assert.equal(
+      timeoutsAfter,
+      timeoutsBefore,
+      `debounce timer still pending after the handler resolved (${String(timeoutsBefore)} -> ${String(timeoutsAfter)})`,
+    );
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 });
