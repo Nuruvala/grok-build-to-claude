@@ -95,6 +95,15 @@ function asToolCall(event: GrokStreamEvent): Extract<GrokStreamEvent, { type: 't
   return event;
 }
 
+function asToolCallUpdate(
+  event: GrokStreamEvent,
+): Extract<GrokStreamEvent, { type: 'tool_call_update' }> {
+  if (event.type !== 'tool_call_update') {
+    assert.fail(`expected type "tool_call_update", got "${event.type}"`);
+  }
+  return event;
+}
+
 describe('createNdjsonReader chunk boundaries', () => {
   it('produces identical lines for chunk sizes 1, 3, 7, 64, and the whole transcript, because a boundary mid-line is the normal case', () => {
     const whole = collectLines(TRANSCRIPT, TRANSCRIPT.length);
@@ -206,8 +215,59 @@ describe('interpretStreamLine modelled types', () => {
       type: 'tool_call_update',
       toolCallId: 'call-033456f4-0',
       status: null,
+      rawOutput: { listing: [] },
       locations: ['.'],
     });
+  });
+
+  it('parses rawOutput from a real tool_call_update, and yields null when the field is absent, null, or not an object', () => {
+    const captured = asToolCallUpdate(
+      interpretStreamLine(
+        JSON.stringify({
+          type: 'tool_call_update',
+          toolCallId: 'ws_b032-0',
+          status: 'completed',
+          content: [],
+          rawOutput: {
+            action: {
+              type: 'search',
+              query: 'latest stable Node.js release version',
+              sources: [{ type: 'url', url: 'https://nodejs.org/en' }],
+            },
+            id: 'ws_b032-0',
+            status: 'completed',
+          },
+          locations: [],
+        }),
+      ),
+    );
+    assert.deepEqual(captured.rawOutput, {
+      action: {
+        type: 'search',
+        query: 'latest stable Node.js release version',
+        sources: [{ type: 'url', url: 'https://nodejs.org/en' }],
+      },
+      id: 'ws_b032-0',
+      status: 'completed',
+    });
+
+    assert.equal(
+      asToolCallUpdate(interpretStreamLine('{"type":"tool_call_update","status":"completed"}'))
+        .rawOutput,
+      null,
+    );
+    assert.equal(
+      asToolCallUpdate(
+        interpretStreamLine('{"type":"tool_call_update","status":null,"rawOutput":null}'),
+      ).rawOutput,
+      null,
+    );
+    assert.equal(
+      asToolCallUpdate(
+        interpretStreamLine('{"type":"tool_call_update","rawOutput":"not-an-object"}'),
+      ).rawOutput,
+      null,
+    );
   });
 
   it('maps a usage event through the shared result parser so per-turn usage matches the json path', () => {
@@ -463,7 +523,7 @@ describe('createStreamCollector folding', () => {
     assert.deepEqual(outcome, { kind: 'unparseable', reason: 'nothing was accepted' });
   });
 
-  it('returns unparseable with a different reason when events arrived but none carried text or metadata', () => {
+  it('returns partial when events arrived but none carried text or metadata, because a parsed stream is not invalid JSON', () => {
     const collector = createStreamCollector();
     collector.accept(interpretStreamLine('{"type":"thought","data":"hmm"}'));
     collector.accept(interpretStreamLine('{"type":"available_commands"}'));
@@ -471,11 +531,20 @@ describe('createStreamCollector folding', () => {
     collector.accept(interpretStreamLine('{"type":"usage"}'));
     collector.accept(interpretStreamLine('{"type":"tool_call","title":"list_dir"}'));
     collector.accept(interpretStreamLine('{"type":"tool_call_update","status":"completed"}'));
-    const outcome = collector.outcome();
-    assert.deepEqual(outcome, {
-      kind: 'unparseable',
-      reason: 'events were accepted but none carried text or metadata',
-    });
+    const outcome = assertPartialOutcome(collector.outcome());
+    assert.equal(outcome.result.text, '');
+    assert.equal(outcome.result.sessionId, null);
+    assert.equal(outcome.reason, 'stream ended before the end event');
+  });
+
+  it('returns partial, not unparseable, for a stream of only tool events with no text and no end', () => {
+    const collector = createStreamCollector();
+    collector.accept(interpretStreamLine('{"type":"tool_call","title":"Web search:"}'));
+    collector.accept(interpretStreamLine('{"type":"tool_call_update","status":"completed"}'));
+    const outcome = assertPartialOutcome(collector.outcome());
+    assert.equal(outcome.result.text, '');
+    assert.equal(outcome.result.sessionId, null);
+    assert.equal(outcome.reason, 'stream ended before the end event');
   });
 
   it("does not leak thought deltas into result.text, because the json path's text field is the response only", () => {

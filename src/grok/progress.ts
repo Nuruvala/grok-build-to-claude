@@ -43,7 +43,11 @@ export function createProgressMapper(): ProgressMapper {
     accept: (event: GrokStreamEvent): ProgressEmission | null => {
       switch (event.type) {
         case 'tool_call': {
-          const label = nonempty(event.title) ?? nonempty(event.toolName) ?? 'tool';
+          const rawLabel = nonempty(event.title) ?? nonempty(event.toolName) ?? 'tool';
+          // The CLI's title for a backend search is literally `"Web search:"`
+          // (verified grok 1.0.4 on 2026-08-17). Leaving the colon produces a
+          // dangling label with nothing after it.
+          const label = trimTrailingColon(rawLabel);
           if (event.toolCallId !== null) {
             labels.set(event.toolCallId, label);
           }
@@ -55,6 +59,8 @@ export function createProgressMapper(): ProgressMapper {
           if (event.status === null || event.status === '') return null;
           const recorded = event.toolCallId === null ? undefined : labels.get(event.toolCallId);
           const label = recorded ?? nonempty(event.toolCallId) ?? 'tool';
+          const actionLine = formatWebAction(event.rawOutput);
+          if (actionLine !== undefined) return emit(actionLine);
           return emit(`${label} — ${event.status}`);
         }
         case 'text':
@@ -133,4 +139,40 @@ function looksLikePath(value: string): boolean {
 
 function nonempty(value: string | null): string | undefined {
   return value !== null && value !== '' ? value : undefined;
+}
+
+function trimTrailingColon(label: string): string {
+  return label.endsWith(':') ? label.slice(0, -1) : label;
+}
+
+/**
+ * Verified grok 1.0.4 on 2026-08-17: a WebSearch `tool_call_update` carries
+ * `rawOutput.action` as `{type:"search", query, sources}` or
+ * `{type:"open_page", url}`. Progress used to emit the bare title
+ * (`Web search:`) with no query or URL — the data was already in hand.
+ * Kept here rather than imported from `websearch/` so this module stays
+ * independent of the tool that first needed the shape.
+ */
+function formatWebAction(rawOutput: Readonly<Record<string, unknown>> | null): string | undefined {
+  if (rawOutput === null) return undefined;
+  const action = rawOutput['action'];
+  if (!isRecord(action)) return undefined;
+  const actionType = action['type'];
+  if (actionType === 'search') {
+    const query = action['query'];
+    if (typeof query !== 'string' || query === '') return undefined;
+    const sources = action['sources'];
+    const count = Array.isArray(sources) ? sources.length : 0;
+    return count > 0 ? `searched "${query}" (${count} sources)` : `searched "${query}"`;
+  }
+  if (actionType === 'open_page') {
+    const url = action['url'];
+    if (typeof url !== 'string' || url === '') return undefined;
+    return `opened ${url}`;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

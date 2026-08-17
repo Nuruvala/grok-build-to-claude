@@ -145,6 +145,24 @@ describe('createProgressMapper tool_call', () => {
       'grep src',
     );
   });
+
+  it('trims a single trailing colon from the tool_call label, because the CLI titles a backend search "Web search:"', () => {
+    const mapper = createProgressMapper();
+    assert.equal(
+      mapper.accept(
+        toolCall({
+          title: 'Web search:',
+          rawInput: { variant: 'WebSearch', backend: true },
+        }),
+      )?.message,
+      'Web search',
+    );
+    assert.ok(
+      !mapper
+        .accept(toolCall({ title: 'X search:', rawInput: { variant: 'XSearch' } }))
+        ?.message.endsWith(':'),
+    );
+  });
 });
 
 describe('createProgressMapper tool_call_update', () => {
@@ -155,6 +173,7 @@ describe('createProgressMapper tool_call_update', () => {
         type: 'tool_call_update',
         toolCallId: 'call-1',
         status: null,
+        rawOutput: null,
         locations: ['.'],
       }),
       null,
@@ -164,6 +183,7 @@ describe('createProgressMapper tool_call_update', () => {
         type: 'tool_call_update',
         toolCallId: 'call-1',
         status: '',
+        rawOutput: null,
         locations: [],
       }),
       null,
@@ -183,6 +203,7 @@ describe('createProgressMapper tool_call_update', () => {
       type: 'tool_call_update',
       toolCallId: 'call-033456f4-0',
       status: 'completed',
+      rawOutput: null,
       locations: [],
     });
     assert.ok(emission);
@@ -197,6 +218,7 @@ describe('createProgressMapper tool_call_update', () => {
         type: 'tool_call_update',
         toolCallId: 'call-orphan',
         status: 'completed',
+        rawOutput: null,
         locations: [],
       })?.message,
       'call-orphan — completed',
@@ -206,6 +228,7 @@ describe('createProgressMapper tool_call_update', () => {
         type: 'tool_call_update',
         toolCallId: null,
         status: 'failed',
+        rawOutput: null,
         locations: [],
       })?.message,
       'tool — failed',
@@ -215,9 +238,84 @@ describe('createProgressMapper tool_call_update', () => {
         type: 'tool_call_update',
         toolCallId: '',
         status: 'failed',
+        rawOutput: null,
         locations: [],
       })?.message,
       'tool — failed',
+    );
+  });
+
+  it('names the query and source count for a completed search, and omits the suffix when sources are empty', () => {
+    const mapper = createProgressMapper();
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'ws-1',
+        status: 'completed',
+        rawOutput: {
+          action: {
+            type: 'search',
+            query: 'latest Node.js LTS',
+            sources: [
+              { type: 'url', url: 'https://nodejs.org' },
+              { type: 'url', url: 'https://github.com' },
+            ],
+          },
+        },
+        locations: [],
+      })?.message,
+      'searched "latest Node.js LTS" (2 sources)',
+    );
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'ws-2',
+        status: 'completed',
+        rawOutput: { action: { type: 'search', query: 'empty result set', sources: [] } },
+        locations: [],
+      })?.message,
+      'searched "empty result set"',
+    );
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'ws-3',
+        status: 'completed',
+        rawOutput: { action: { type: 'search', query: 'no sources field' } },
+        locations: [],
+      })?.message,
+      'searched "no sources field"',
+    );
+  });
+
+  it('names the URL for a completed page open', () => {
+    const mapper = createProgressMapper();
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'ws-page',
+        status: 'completed',
+        rawOutput: {
+          action: { type: 'open_page', url: 'https://nodejs.org/en/about/previous-releases' },
+        },
+        locations: [],
+      })?.message,
+      'opened https://nodejs.org/en/about/previous-releases',
+    );
+  });
+
+  it('falls through to the status line when action.type is not a modelled web action', () => {
+    const mapper = createProgressMapper();
+    mapper.accept(toolCall({ toolCallId: 'ws-other', title: 'Web search:' }));
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'ws-other',
+        status: 'completed',
+        rawOutput: { action: { type: 'browse_site', url: 'https://example.com' } },
+        locations: [],
+      })?.message,
+      'Web search — completed',
     );
   });
 });

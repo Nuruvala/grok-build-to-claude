@@ -38,7 +38,10 @@ export const LATE_RESULT_WAIT_MS = 1500;
 const LATE_RESULT_POLL_MS = 100;
 
 const StopInput = z.object({
-  runId: z.string().min(1).describe('The runId returned by a background `grok` or `review` call.'),
+  runId: z
+    .string()
+    .min(1)
+    .describe('The runId returned by a background `grok`, `review`, or `websearch` call.'),
 });
 
 type StopInput = z.output<typeof StopInput>;
@@ -47,7 +50,7 @@ export const stopTool = defineTool({
   name: 'stop',
   title: 'Stop a background run',
   description:
-    'Terminate a background `grok` or `review` run: the worker and the grok process it ' +
+    'Terminate a background `grok`, `review`, or `websearch` run: the worker and the grok process it ' +
     'spawned. Stopping an already-finished run is not an error. A run cancelled mid-flight ' +
     'may still have produced a resumable session id, which the result reports.',
   schema: StopInput,

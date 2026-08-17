@@ -14,8 +14,14 @@ import { createProgressMapper } from '../grok/progress.js';
 import type { ProgressEmission } from '../grok/progress.js';
 import { parseGrokJson } from '../grok/result.js';
 import type { GrokRunResult, ParsedGrokOutput } from '../grok/result.js';
-import { createNdjsonReader, createStreamCollector, interpretStreamLine } from '../grok/stream.js';
-import type { StreamOutcome } from '../grok/stream.js';
+import {
+  createNdjsonReader,
+  createStreamCollector,
+  emptyResult,
+  interpretStreamLine,
+} from '../grok/stream.js';
+import type { GrokStreamEvent, StreamOutcome } from '../grok/stream.js';
+import { log } from '../log.js';
 import type { PermissionLevel } from '../permission.js';
 import { resumeCommand } from '../sessions/select.js';
 import type { ProgressUpdate, ToolContext, ToolResult } from '../types.js';
@@ -37,17 +43,53 @@ export interface GrokRunRequest {
   readonly args: readonly string[];
   readonly model: string | null;
   readonly permissionLevel: PermissionLevel;
-  /** Extra keys merged into `content[0]._meta` on the success path. */
+  /**
+   * Extra keys merged into `content[0]._meta` on every path. Handler keys go
+   * first so the run's own keys win; `sessionId` / `resumeCommand` are stripped
+   * from this object on any non-success path.
+   */
   readonly meta?: GrokRunMeta | undefined;
   /** Transform the model's text before it becomes the result body. Identity when omitted. */
   readonly formatText?: ((result: GrokRunResult) => string) | undefined;
   /** Decide the error flag from the parsed result. Defaults to a successful run being `isError: false`. */
   readonly isError?: ((result: GrokRunResult) => boolean) | undefined;
+  /**
+   * Receives every parsed stream event, in order, as it arrives. Only called on the streaming
+   * path — a handler that wants events must build argv with `--output-format streaming-json`.
+   * Exists so a tool can harvest data the result object does not carry: `end` has no record of
+   * which searches ran, so `websearch` counts them here or not at all.
+   */
+  readonly observer?: ((event: GrokStreamEvent) => void) | undefined;
+}
+
+/**
+ * Which parser the child's output needs, read off the argv we are about to spawn.
+ *
+ * The two used to be decided separately — the handler chose the format from
+ * `progressRequested`, and this module chose the parser from the same flag — so a handler that
+ * emitted one format while the parser expected the other was a silent unparseable run. Reading
+ * the flag we are actually passing makes that combination unrepresentable.
+ *
+ * Last `--output-format`, not first: `buildGrokArgs` emits exactly one, but a caller that
+ * appended an override should get the one that wins.
+ */
+export function streamingOutput(args: readonly string[]): boolean {
+  let format: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== '--output-format') continue;
+    format = args[index + 1];
+    index += 1;
+  }
+  return format === 'streaming-json';
 }
 
 export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promise<ToolResult> {
   const sink = ctx.runSink;
-  const stream = ctx.progressRequested ? startStreamSession(ctx.reportProgress) : undefined;
+  // Progress emission stays gated the way it already is: `reportProgress` is a no-op when the
+  // client sent no `progressToken`, so a non-progress streaming run emits nothing.
+  const stream = streamingOutput(request.args)
+    ? startStreamSession(ctx.reportProgress, request.observer)
+    : undefined;
 
   const onStdout =
     sink === undefined && stream === undefined
@@ -102,6 +144,8 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
       `Failed to start grok at "${ctx.config.grokBinary}".${spawnCause(exec)}\n\n` +
         'Install the grok CLI or set GROK_BINARY to its path.',
       exec,
+      request,
+      emptyResult(),
     );
   }
 
@@ -122,6 +166,8 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
         'Set GROK_MCP_TIMEOUT_MS to a higher value if the run needs more time.\n' +
         buffered(exec, streamedStdout(stream, outcome, exec)),
       exec,
+      request,
+      resultForMeta(outcome),
     );
   }
 
@@ -129,23 +175,40 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
     return errorResult(
       `The grok run was cancelled by the client.\n${buffered(exec, streamedStdout(stream, outcome, exec))}`.trimEnd(),
       exec,
+      request,
+      resultForMeta(outcome),
     );
   }
 
   if (outcome.kind === 'cli-error') {
     const message = outcome.message === '' ? '(no message)' : outcome.message;
-    return errorResult(`grok reported an error: ${message}\n${buffered(exec)}`.trimEnd(), exec);
+    return errorResult(
+      `grok reported an error: ${message}\n${buffered(exec)}`.trimEnd(),
+      exec,
+      request,
+      emptyResult(),
+    );
   }
 
   if (outcome.kind === 'partial') {
+    // Recovered text when the model wrote some; the raw buffer when it did
+    // not. A stream of only tool events (or one unparseable line) has empty
+    // recovered text, and dropping the buffer would throw away the only
+    // evidence the run produced — the M5b rule this branch exists to keep.
+    const recovered = outcome.result.text;
+    const body = recovered !== '' ? recovered : preview(exec.stdout);
     return {
       content: [
         {
           type: 'text',
           text:
-            `${outcome.result.text}\n\n` +
+            `${body}\n\n` +
             '[stream ended before its end event, so session id, usage, and cost are unavailable]',
           _meta: {
+            // Handler keys first so the run's own keys win — same rule as
+            // successResult. sessionId / resumeCommand are stripped: a
+            // partial path must not gain a session Grok never confirmed.
+            ...nonSuccessHandlerMeta(request.meta, outcome.result),
             outcome: exec.outcome,
             durationMs: exec.durationMs,
             exitCode: exec.code,
@@ -162,12 +225,19 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
   }
 
   if (exec.code !== 0) {
-    return errorResult(`grok exited with code ${exec.code ?? 'unknown'}.\n${buffered(exec)}`, exec);
+    return errorResult(
+      `grok exited with code ${exec.code ?? 'unknown'}.\n${buffered(exec)}`,
+      exec,
+      request,
+      emptyResult(),
+    );
   }
 
   return errorResult(
     `grok returned output that is not valid JSON (${outcome.reason}).\n\n` + preview(exec.stdout),
     exec,
+    request,
+    emptyResult(),
   );
 }
 
@@ -192,7 +262,10 @@ interface StreamSession {
   readonly clearTimer: () => void;
 }
 
-function startStreamSession(reportProgress: (update: ProgressUpdate) => void): StreamSession {
+function startStreamSession(
+  reportProgress: (update: ProgressUpdate) => void,
+  observer: ((event: GrokStreamEvent) => void) | undefined,
+): StreamSession {
   const reader = createNdjsonReader();
   const collector = createStreamCollector();
   const mapper = createProgressMapper();
@@ -209,9 +282,23 @@ function startStreamSession(reportProgress: (update: ProgressUpdate) => void): S
     debounceTimer = undefined;
   }
 
+  function notifyObserver(event: GrokStreamEvent): void {
+    if (observer === undefined) return;
+    try {
+      observer(event);
+    } catch (error: unknown) {
+      // Same reasoning as the `never` arm in `createStreamCollector`: this
+      // runs inside a stdout data handler. An exception here is uncaught,
+      // kills the process, and leaves the run's promise forever unresolved.
+      // Dropping one observer event beats taking down the server.
+      log.warn('stream observer threw; dropping this event and continuing', error);
+    }
+  }
+
   function handleLine(line: string): void {
     const event = interpretStreamLine(line);
     collector.accept(event);
+    notifyObserver(event);
 
     const narration = event.type === 'text' || event.type === 'thought';
     if (!narration) {
@@ -349,6 +436,38 @@ function resolveMeta(
   return meta;
 }
 
+/**
+ * Recovered result when the stream produced one, otherwise the empty shape
+ * `emptyResult()` builds. Lets a meta function be called unconditionally on
+ * every non-success path. `searchMeta` ignores the argument; review's prose
+ * meta returns its base for a null stop reason.
+ */
+function resultForMeta(outcome: StreamOutcome): GrokRunResult {
+  if (outcome.kind === 'result' || outcome.kind === 'partial') {
+    return outcome.result;
+  }
+  return emptyResult();
+}
+
+/**
+ * Handler meta for a path that is not a confirmed result. Strip `sessionId`
+ * and `resumeCommand` before merging: no handler sets them today, and the
+ * guard is what keeps that from becoming load-bearing. Reporting a session
+ * Grok never confirmed is the plugin bug this repo exists to not reproduce.
+ */
+function nonSuccessHandlerMeta(
+  meta: GrokRunMeta | undefined,
+  result: GrokRunResult,
+): Readonly<Record<string, unknown>> {
+  const resolved = resolveMeta(meta, result);
+  const stripped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(resolved)) {
+    if (key === 'sessionId' || key === 'resumeCommand') continue;
+    stripped[key] = value;
+  }
+  return stripped;
+}
+
 function formatResultText(
   text: string,
   exitCode: number | null,
@@ -367,13 +486,20 @@ function formatResultText(
   return `${text}\n\n[the run stopped early — stopReason: ${stopReason}]`;
 }
 
-function errorResult(text: string, exec: ExecResult): ToolResult {
+function errorResult(
+  text: string,
+  exec: ExecResult,
+  request: GrokRunRequest,
+  result: GrokRunResult,
+): ToolResult {
   return {
     content: [
       {
         type: 'text',
         text,
         _meta: {
+          // Handler keys first so the run's own keys win — same rule as successResult.
+          ...nonSuccessHandlerMeta(request.meta, result),
           outcome: exec.outcome,
           durationMs: exec.durationMs,
         },

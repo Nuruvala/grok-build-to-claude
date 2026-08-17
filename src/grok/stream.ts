@@ -26,6 +26,7 @@ export type GrokStreamEvent =
       readonly type: 'tool_call_update';
       readonly toolCallId: string | null;
       readonly status: string | null;
+      readonly rawOutput: Readonly<Record<string, unknown>> | null;
       readonly locations: readonly string[];
     }
   | { readonly type: 'usage'; readonly usage: GrokUsage | null }
@@ -84,7 +85,7 @@ export function interpretStreamLine(line: string): GrokStreamEvent {
         title: stringField(parsed, 'title'),
         kind: stringField(parsed, 'kind'),
         status: stringField(parsed, 'status'),
-        rawInput: parseRawInput(parsed['rawInput']),
+        rawInput: parseRawRecord(parsed['rawInput']),
         locations: flattenLocations(parsed['locations']),
       });
     case 'tool_call_update':
@@ -92,6 +93,7 @@ export function interpretStreamLine(line: string): GrokStreamEvent {
         type: 'tool_call_update',
         toolCallId: stringField(parsed, 'toolCallId'),
         status: stringField(parsed, 'status'),
+        rawOutput: parseRawRecord(parsed['rawOutput']),
         locations: flattenLocations(parsed['locations']),
       });
     case 'usage':
@@ -197,29 +199,24 @@ export function createStreamCollector(): StreamCollector {
         });
       }
 
-      if (text !== '') {
-        return freezeOutcome({
-          kind: 'partial',
-          result: Object.freeze({ ...emptyResult(), text }),
-          // Do not invent a session id. A partial run has no confirmed session — reporting
-          // one Grok never recorded is the plugin bug this collector exists to not reproduce.
-          reason: 'stream ended before the end event',
-        });
-      }
-
       if (accepted === 0) {
         return freezeOutcome({ kind: 'unparseable', reason: 'nothing was accepted' });
       }
 
       return freezeOutcome({
-        kind: 'unparseable',
-        reason: 'events were accepted but none carried text or metadata',
+        kind: 'partial',
+        result: Object.freeze({ ...emptyResult(), text }),
+        // Do not invent a session id. A partial run has no confirmed session — reporting
+        // one Grok never recorded is the plugin bug this collector exists to not reproduce.
+        // Same now that we have harvested tool events and still no `end`.
+        reason: 'stream ended before the end event',
       });
     },
   };
 }
 
-function emptyResult(): GrokRunResult {
+/** Empty result used when a stream never produced an `end`. Session id stays null. */
+export function emptyResult(): GrokRunResult {
   return Object.freeze({
     text: '',
     sessionId: null,
@@ -245,7 +242,12 @@ function flattenLocations(value: unknown): readonly string[] {
   return Object.freeze(paths);
 }
 
-function parseRawInput(value: unknown): Readonly<Record<string, unknown>> | null {
+/**
+ * Shape-neutral parse for `rawInput` / `rawOutput`. A non-object — including
+ * the observed mid-flight `null` — becomes `null`. Named for the shape, not
+ * the field, so the two call sites cannot drift.
+ */
+function parseRawRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   if (!isRecord(value)) return null;
   return Object.freeze({ ...value });
 }

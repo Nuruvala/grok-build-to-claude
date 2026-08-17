@@ -15,12 +15,14 @@ import { reviewTool } from './handlers/review.js';
 import { sessionsTool } from './handlers/sessions.js';
 import { statusTool } from './handlers/status.js';
 import { stopTool } from './handlers/stop.js';
+import { websearchTool } from './handlers/websearch.js';
 
 const TOOLS: readonly AnyToolDefinition[] = [
   checkTool,
   grokTool,
   reviewTool,
   sessionsTool,
+  websearchTool,
   statusTool,
   stopTool,
   helpTool,

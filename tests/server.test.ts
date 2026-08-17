@@ -78,12 +78,12 @@ describe('MCP protocol', () => {
     assert.ok(client.getServerCapabilities()?.tools);
   });
 
-  it('lists check, grok, review, sessions, status, stop, and help with a description and a valid object input schema each', async () => {
+  it('lists check, grok, review, sessions, websearch, status, stop, and help with a description and a valid object input schema each', async () => {
     const { tools } = await client.listTools();
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ['check', 'grok', 'review', 'sessions', 'status', 'stop', 'help'],
+      ['check', 'grok', 'review', 'sessions', 'websearch', 'status', 'stop', 'help'],
     );
 
     for (const tool of tools) {

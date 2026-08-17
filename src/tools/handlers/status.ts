@@ -83,7 +83,7 @@ export const statusTool = defineTool({
   name: 'status',
   title: 'Poll a background run',
   description:
-    'Poll a background `grok` or `review` run, or list recent ones. A finished run replays ' +
+    'Poll a background `grok`, `review`, or `websearch` run, or list recent ones. A finished run replays ' +
     'the original tool result — same text, same metadata, same error flag — so background is ' +
     'a transport, not a second implementation. A run whose worker process has vanished is ' +
     'reported as `abandoned` rather than as still running. Pass `runId` to inspect one run, ' +
