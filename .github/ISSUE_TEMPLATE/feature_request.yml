@@ -1,0 +1,38 @@
+name: Feature request
+description: A tool, parameter, or behaviour this server should have
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        [ROADMAP.md](https://github.com/Nuruvala/grok-build-to-claude/blob/main/ROADMAP.md) has a
+        "Deferred / evaluated and rejected" section at the bottom. Several obvious-looking ideas
+        are there with the measurement that ruled them out — worth a look before writing.
+
+        The bar this project holds itself to: a parameter must be something the server can
+        actually keep. A knob that looks like a guarantee the `grok` CLI does not provide is worse
+        than no knob.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and where the current tools left you.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you want
+      description: The tool, parameter, or behaviour — and what it would return.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cli-support
+    attributes:
+      label: What the CLI provides
+      description: >
+        If you know of a `grok` flag, subcommand, or output field that backs this, name it. If
+        there isn't one, say so — it is still worth filing, it just changes the shape of the answer.

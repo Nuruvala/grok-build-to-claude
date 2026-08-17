@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Grok Build CLI
+    url: https://x.ai
+    about: >
+      Problems with `grok` itself — auth, models, sandboxing, its own flags — belong with xAI. This
+      repository only wraps the CLI.
+  - name: Security report
+    url: https://github.com/Nuruvala/grok-build-to-claude/security/advisories/new
+    about: >
+      Report a vulnerability privately. Do not open a public issue for anything that could be
+      exploited. See docs/security.md.

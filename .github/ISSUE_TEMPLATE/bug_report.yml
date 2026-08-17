@@ -1,0 +1,76 @@
+name: Bug report
+description: Something the server did that it should not have, or did not do that it should
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This server is a wrapper around the `grok` CLI, and the CLI moves fast. The single most
+        useful thing you can attach is the output of the `check` tool — it reports the server
+        version, the resolved binary, the CLI version, auth, and the active permission ceiling in
+        one place.
+
+        If the problem is that `grok` itself misbehaves when you run it directly in a terminal,
+        report it to xAI rather than here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you asked for, what came back, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of the `check` tool
+      description: Ask your MCP client to run the grok-build `check` tool and paste the result.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Claude Code, Cursor, VS Code, or something else — with its version.
+      placeholder: Claude Code 2.x
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Node version
+      placeholder: macOS 15.3, Node 22.14.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: registration
+    attributes:
+      label: How the server is registered
+      description: >
+        The command you used, including any `-e GROK_MCP_*` variables. Redact anything secret —
+        this server never needs your API key on the command line.
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs
+      description: >
+        Re-run with `GROK_MCP_LOG_LEVEL=debug`. The server writes diagnostics to stderr; your
+        client's MCP log will have them. Paste the lines around the failure.
+      render: text
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before filing
+      options:
+        - label: I ran the `check` tool and it did not explain the problem
+          required: true
+        - label: I am on the latest published version of `grok-build-mcp-server`
+          required: false

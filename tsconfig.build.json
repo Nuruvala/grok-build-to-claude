@@ -3,7 +3,13 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "allowJs": false
+    "allowJs": false,
+
+    // The published tarball is `dist` only, so a map pointing at `../src` resolves to nothing.
+    // Embedding the sources keeps stack traces readable from an installed copy, which is what a
+    // bug report is built from; declaration maps have no such fallback and are dropped.
+    "inlineSources": true,
+    "declarationMap": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "tests"]
