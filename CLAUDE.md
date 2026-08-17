@@ -611,14 +611,20 @@ child process untouched.
 
 ## Current state
 
-M1–M6 are complete, so the whole tool surface ships: `check`, `help`, `grok`, `review`, `websearch`,
+M1–M7 are complete. The whole tool surface ships — `check`, `help`, `grok`, `review`, `websearch`,
 `sessions`, `status`, and `stop`, with progress streaming, structured review findings, session
 listing backed by the CLI's own on-disk store, and background runs that survive a restart of this
-server. M7 is the public release — docs, packaging, publishing. Licensed MIT. See
-[ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
+server — and so does the release: [docs/api-reference.md](docs/api-reference.md),
+[docs/security.md](docs/security.md), `CHANGELOG.md`, issue and PR templates, and a tag-triggered
+npm publish workflow with provenance. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones and
+acceptance criteria.
 
-Three constraints a future change must respect. The first two are the background-run design; the
-third is what `websearch` added:
+What is left is the release itself, and it is not something this repo can do on its own: an
+`NPM_TOKEN` repository secret, an `npm login` for the first publish, making the GitHub repo public,
+and pushing a `v0.1.0` tag. The workflow refuses to publish if the tag and `package.json` disagree.
+
+Four constraints a future change must respect. The first two are the background-run design; the
+third is what `websearch` added; the fourth is what M7 found:
 
 - **`record.json` is read-modify-written, so it may only ever have one writer at a time.** M5b made
   that structural rather than conventional: progress, the worker pid, and a result that lost the
@@ -639,3 +645,9 @@ third is what `websearch` added:
   exactly what its name says. The same rule made handler meta reach the error and partial envelopes,
   with `sessionId` and `resumeCommand` stripped so no non-success path can gain a session Grok never
   confirmed.
+- **Anything this server writes that can hold a prompt is owner-only.** A background-run record
+  carries the tool's full arguments, which for `review` is the entire diff; `worker.log` carries the
+  worker's stdout and stderr; an over-64 KiB prompt is written to a `mkdtemp` directory before it
+  reaches `--prompt-file`. All of them are `0700` directories with `0600` files, matching what
+  `~/.grok/sessions` already does. A new write path that defaults its mode is a regression, and
+  `mode` is a floor rather than a grant — umask still applies, and it is ignored on Windows.

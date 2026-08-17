@@ -1,5 +1,13 @@
 # grok-build-mcp-server
 
+[![npm](https://img.shields.io/npm/v/grok-build-mcp-server?style=flat-square)](https://www.npmjs.com/package/grok-build-mcp-server)
+[![CI](https://img.shields.io/github/actions/workflow/status/Nuruvala/grok-build-to-claude/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Nuruvala/grok-build-to-claude/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/node/v/grok-build-mcp-server?style=flat-square)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=grok-build&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22grok-build-mcp-server%22%5D%7D)
+[![Install in Cursor](https://img.shields.io/badge/Cursor-Install_server-1c1c1c?style=flat-square)](https://cursor.com/install-mcp?name=grok-build&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdyb2stYnVpbGQtbWNwLXNlcnZlciJdfQ%3D%3D)
+
 An [MCP](https://modelcontextprotocol.io) stdio server that exposes the [Grok Build](https://x.ai)
 CLI (`grok`) as tools you can call from Claude Code, Cursor, VS Code, or any other MCP client.
 
@@ -11,11 +19,11 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** The tool surface is complete. The server runs real headless Grok agents in the
+> **Status: 0.1.0.** The tool surface is complete. The server runs real headless Grok agents in the
 > foreground or detached in the background, streams progress while they run, stops a run on request,
 > reviews git diffs, researches questions on the web, lists the sessions those runs created, and
-> reports session, usage, and cost. What remains is the public release itself — docs, packaging, and
-> publishing. See [ROADMAP.md](ROADMAP.md).
+> reports session, usage, and cost. See [CHANGELOG.md](CHANGELOG.md) for what shipped and
+> [ROADMAP.md](ROADMAP.md) for what was considered and rejected.
 
 ## Progress
 
@@ -44,7 +52,11 @@ this.
 - [Grok Build CLI](https://x.ai) 1.0.0 or newer, authenticated (`grok models` should succeed)
 - Node.js 22 or newer
 
+If `grok` is not on your `PATH`, set `GROK_BINARY` to its full path when you register the server.
+
 ## Install
+
+### Claude Code
 
 ```bash
 claude mcp add grok-build -- npx -y grok-build-mcp-server
@@ -55,6 +67,27 @@ Then, in Claude Code:
 ```
 > use the grok-build check tool
 ```
+
+`check` reports the resolved binary, the CLI version, whether you are authenticated, and the active
+permission ceiling. If it is happy, the rest will work.
+
+### Any other MCP client
+
+The server speaks MCP over stdio and takes no arguments of its own:
+
+```json
+{
+  "mcpServers": {
+    "grok-build": {
+      "command": "npx",
+      "args": ["-y", "grok-build-mcp-server"]
+    }
+  }
+}
+```
+
+VS Code and Cursor accept the install badges at the top of this page, which carry exactly that
+configuration.
 
 ## Permissions
 
@@ -294,11 +327,30 @@ npm run typecheck
 npm run format
 ```
 
+- [docs/api-reference.md](docs/api-reference.md) — every tool's parameters, result text, `_meta`
+  keys, and the exact conditions under which each is set.
+- [docs/security.md](docs/security.md) — what registering this server authorises, what each
+  permission level actually grants, and what leaves your machine.
 - [docs/engineering.md](docs/engineering.md) — how code is written here: architecture, functional
   TypeScript rules, error and effect discipline, testing and coverage policy, commit workflow.
 - [CLAUDE.md](CLAUDE.md) — project background and the verified `grok` CLI behaviour this server
   depends on.
-- [ROADMAP.md](ROADMAP.md) — milestones and acceptance criteria.
+- [ROADMAP.md](ROADMAP.md) — milestones, acceptance criteria, and the ideas that were measured and
+  rejected.
+
+### Releasing
+
+Bump `version` in `package.json`, move the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md)
+under the new version heading, commit, then:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+[.github/workflows/release.yml](.github/workflows/release.yml) runs the full gate, refuses to
+publish if the tag and `package.json` disagree, proves the packed tarball starts and answers
+`initialize`, then publishes to npm with provenance and cuts a GitHub release. It needs an
+`NPM_TOKEN` repository secret.
 
 ## License
 

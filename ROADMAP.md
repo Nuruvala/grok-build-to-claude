@@ -588,7 +588,10 @@ the update event. It now reads:
 
 ---
 
-## M7 — Public release
+## M7 — Public release ✅
+
+Shipped 2026-08-18. Everything a stranger needs to install this, understand what it authorises, and
+read what a tool returns.
 
 **Deliverables**
 
@@ -606,6 +609,55 @@ the update event. It now reads:
 
 - A clean machine can go from zero to a working tool call using only the README.
 - `npx -y grok-build-mcp-server` works from the published tarball (`files` includes `dist` only).
+
+**Delivered.** The requirements line said Node >= 20; the floor has been 22 since M0, because Node
+20 reached end of life on 2026-04-30. The README says 22.
+
+**Writing the security document found the one real defect of the milestone.** Background-run records
+were created `0755` with `0644` files, and a record holds the tool's full arguments — the prompt,
+and for `review` the entire diff. Grok's own `~/.grok/sessions` is `0700`. Every create path in
+`src/jobs/store.ts` now sets `0700` on directories and `0600` on files, with four POSIX-only mode
+tests. `worker.log`, opened in `src/jobs/spawn.ts` rather than the store, was missed by that pass
+and fixed separately — it carries the worker's stdout and stderr. This is the pattern that has held
+all the way through: writing down what the code guarantees is how you find out it doesn't.
+
+**The reference is generated from nothing.** `docs/api-reference.md` is hand-written against the zod
+schemas and the handlers, tool by tool, with a "When" column on every `_meta` key naming the
+condition that guards the write. It says so in its own lead: the live `tools/list` payload is
+authoritative and this file is not a second schema. That is deliberate — a generated reference would
+document the input schemas, which are already machine-readable, and say nothing about the part
+callers actually get wrong, which is what comes back and under which conditions.
+
+**A dogfooded `review` of the diff found four things worth fixing**, all of them documentation
+over-claiming rather than code:
+
+- `reviewIncomplete` was documented as present on any structured run without a final object. It is
+  not: a run that reaches `end_turn` with unreadable output is the `malformed` path and gets
+  `parseError` with no `reviewIncomplete`. A client keying on the wrong field would have missed it.
+- The disk inventory in `docs/security.md` was short by one location this server itself creates: a
+  prompt over 64 KiB is written to a `mkdtemp` directory as `prompt.txt`, which is how a large
+  `review` diff actually reaches the CLI.
+- The retention sweep was described as terminal records only. It also deletes orphaned non-terminal
+  records past 14 days, and its 200-record cap counts directories of any state, so a busy machine
+  can drop a recent completed run.
+- `none` / `off` were documented as the opt-out values for the default model and effort variables.
+  `default` is a third, so there is no way to pass the literal string `default` as a model id.
+
+It also flagged `gh release create --verify-tag` as requiring an annotated tag, which it does not —
+the flag checks that the tag exists on the remote, and the workflow only runs on a pushed tag. Left
+alone.
+
+**One honesty fix that was not about M7 at all.** `help` told a timed-out caller to set
+`GROK_MCP_TIMEOUT_MS`. The help timeout is `Math.min(config.timeoutMs, 15_000)`, so raising that
+variable cannot move the deadline — the same defect as blaming a turn budget nobody set, which this
+repo already treats as a bug. It now names the cap and says the variable cannot raise it.
+
+**Packaging.** `files` is `["dist"]`; npm adds `package.json`, `README.md`, and `LICENSE` on its
+own, and `src/version.ts` reads the packed `package.json` at startup. Declaration maps are off in
+the build and `inlineSources` is on, because a map pointing at `../src` resolves to nothing in an
+installed copy. The release workflow packs once, installs that tarball into a scratch directory,
+drives a real `initialize` against the installed binary, and then publishes **that same file**
+rather than packing a second time.
 
 ---
 
