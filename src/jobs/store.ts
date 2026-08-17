@@ -3,16 +3,39 @@
  * that touches the filesystem.
  *
  * One directory per run so two concurrent runs cannot collide by construction.
- * `record.json` is read-modify-written; that is only safe because ownership is
- * exclusive at every moment:
  *
- * - the MCP server writes the record once, at creation, and never again;
- * - the worker owns every non-terminal update (pid, running, progress, argv);
- * - the terminal transition goes through `finalizeRun`, which claims, writes,
- *   and releases the claim if the write does not land.
+ * `record.json` has one writer at a time. Creation, the worker's `running`
+ * patch (and the one-shot argv/childPid write that follows spawn), and the
+ * terminal write are the three events that touch it. Progress lives in
+ * `progress.json`, the worker pid in `worker.pid`, and a result produced
+ * after a lost claim in `late-result.json` — each sidecar has exactly one
+ * writer. A second writer on `record.json` is how a progress rename spends
+ * the claim and leaves the run un-terminalisable.
+ *
+ * `stop` claims the terminal transition, then signals the worker. It writes
+ * `cancelled` only after the process group is gone. If the tree is still
+ * alive (`survived`, `not-permitted`, or `no-pid` after the sidecar
+ * fallback), it releases the claim and leaves the record non-terminal so a
+ * later claimant can still finish the run. A `cancelled` record next to a
+ * live process is neither honest nor retryable.
+ *
+ * `patchRun` refuses both a terminal record and a present `terminal.claim`.
+ * A claim is a promise that a terminal write is coming; a non-terminal patch
+ * after it is the interleaving that loses the record. The worker exits when
+ * its `running` patch is refused — somebody ended the run before it started.
  */
 
-import { mkdir, open, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -22,12 +45,16 @@ import { log } from '../log.js';
 import {
   applyPatch,
   isTerminal,
+  parseRunProgress,
   parseRunRecord,
+  parseStoredResult,
   RECORD_SCHEMA_VERSION,
   summarize,
   type RunPatch,
+  type RunProgress,
   type RunRecord,
   type RunState,
+  type StoredResult,
 } from './record.js';
 
 /** Directory under `$GROK_MCP_STATE_DIR` that holds one folder per run. */
@@ -45,6 +72,9 @@ export const DEFAULT_TAIL_BYTES = 8 * 1024;
 
 const RECORD_FILE = 'record.json';
 const INPUT_FILE = 'input.json';
+const PROGRESS_FILE = 'progress.json';
+const LATE_RESULT_FILE = 'late-result.json';
+const WORKER_PID_FILE = 'worker.pid';
 const CLAIM_FILE = 'terminal.claim';
 const LOST_CLAIM_RETRIES = 5;
 const LOST_CLAIM_WAIT_MS = 20;
@@ -210,8 +240,87 @@ export async function listRuns(
 }
 
 /**
- * Non-terminal update. Refuses (returns null) once the record is terminal.
- * Worker-only — the server writes the record once, at creation, and never again.
+ * Worker-only sidecar. Only this process writes it, so there is no second
+ * writer to race a terminal rename of `record.json`.
+ */
+export async function writeProgress(
+  stateDir: string,
+  runId: string,
+  progress: RunProgress,
+): Promise<void> {
+  await writeJsonAtomic(path.join(runDir(stateDir, runId), PROGRESS_FILE), {
+    progressCount: progress.progressCount,
+    lastProgress: progress.lastProgress,
+    lastProgressAt: progress.lastProgressAt,
+  });
+}
+
+export async function readProgress(stateDir: string, runId: string): Promise<RunProgress | null> {
+  const filePath = path.join(runDir(stateDir, runId), PROGRESS_FILE);
+  const raw = await readBounded(filePath, RECORD_MAX_BYTES);
+  if (raw === null || raw.truncated) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.text) as unknown;
+  } catch {
+    return null;
+  }
+  return parseRunProgress(parsed);
+}
+
+/**
+ * A result produced after someone else claimed the terminal transition.
+ * Only the worker writes it — a run cancelled at turn nine has already been
+ * paid for, and it may carry a sessionId that resumes everything it did.
+ */
+export async function writeLateResult(
+  stateDir: string,
+  runId: string,
+  result: StoredResult,
+): Promise<void> {
+  await writeJsonAtomic(path.join(runDir(stateDir, runId), LATE_RESULT_FILE), result);
+}
+
+export async function readLateResult(
+  stateDir: string,
+  runId: string,
+): Promise<StoredResult | null> {
+  const filePath = path.join(runDir(stateDir, runId), LATE_RESULT_FILE);
+  const raw = await readBounded(filePath, RECORD_MAX_BYTES);
+  if (raw === null || raw.truncated) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.text) as unknown;
+  } catch {
+    return null;
+  }
+  return parseStoredResult(parsed);
+}
+
+/**
+ * Written once by the server immediately after a successful spawn, never
+ * updated. `stop` cannot wait for the worker to patch `record.workerPid`
+ * — that write is the boot window — and it must not become a second writer
+ * of `record.json` to close the gap.
+ */
+export async function writeWorkerPid(stateDir: string, runId: string, pid: number): Promise<void> {
+  await writeTextAtomic(path.join(runDir(stateDir, runId), WORKER_PID_FILE), `${pid}\n`);
+}
+
+export async function readWorkerPid(stateDir: string, runId: string): Promise<number | null> {
+  const filePath = path.join(runDir(stateDir, runId), WORKER_PID_FILE);
+  const raw = await readBounded(filePath, RECORD_MAX_BYTES);
+  if (raw === null || raw.truncated) return null;
+  const parsed = Number.parseInt(raw.text.trim(), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+/**
+ * Non-terminal update. Refuses (returns null) once the record is terminal
+ * or a `terminal.claim` exists. Worker-only — used for the `running`
+ * transition and the one-shot argv/childPid write. Progress is in
+ * `progress.json`.
  */
 export async function patchRun(
   stateDir: string,
@@ -221,6 +330,7 @@ export async function patchRun(
   const current = await readRun(stateDir, runId);
   if (current === null) return null;
   if (isTerminal(current.state)) return null;
+  if (await terminalClaimExists(stateDir, runId)) return null;
   const next = applyPatch(current, patch);
   if (isTerminal(next.state)) return null;
   await writeJsonAtomic(path.join(runDir(stateDir, runId), RECORD_FILE), next);
@@ -288,7 +398,7 @@ export type FinalizeOutcome =
  *
  * A claim is a promise to write a terminal state, and a claimant that cannot
  * keep it must give the promise back — otherwise the next process to try
- * (the worker's error path, `status`, M5b's `stop`) loses forever.
+ * (the worker's error path, `status`, `stop`) loses forever.
  */
 export async function finalizeRun(
   stateDir: string,
@@ -313,7 +423,7 @@ export async function finalizeRun(
   }
 }
 
-async function releaseClaim(stateDir: string, runId: string): Promise<void> {
+export async function releaseClaim(stateDir: string, runId: string): Promise<void> {
   try {
     await unlink(path.join(runDir(stateDir, runId), CLAIM_FILE));
   } catch (error: unknown) {
@@ -517,6 +627,16 @@ function freezeListed(listed: ListedRuns): ListedRuns {
     ...listed,
     records: Object.freeze([...listed.records]),
   });
+}
+
+async function terminalClaimExists(stateDir: string, runId: string): Promise<boolean> {
+  try {
+    await access(path.join(runDir(stateDir, runId), CLAIM_FILE));
+    return true;
+  } catch (error: unknown) {
+    if (errorCode(error) === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function errorCode(error: unknown): string | undefined {

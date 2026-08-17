@@ -108,6 +108,14 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
   const outcome =
     stream === undefined ? parsedToStreamOutcome(parseGrokJson(exec.stdout)) : stream.outcome();
 
+  // `--max-turns` exits 1 with a complete result on stdout (verified grok 1.0.0,
+  // 2026-08-16). The parsed result wins over the exit code so we keep the
+  // session id and the spend that produced it. `stop` is the same shape: it
+  // SIGTERMs a worker whose grok child may already have written `end`.
+  if (outcome.kind === 'result') {
+    return successResult(outcome.result, exec, request, ctx.config.structuredContentEnabled);
+  }
+
   if (exec.outcome === 'timeout') {
     return errorResult(
       `The grok run timed out after ${Math.round(exec.durationMs)} ms.\n\n` +
@@ -122,13 +130,6 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
       `The grok run was cancelled by the client.\n${buffered(exec, streamedStdout(stream, outcome, exec))}`.trimEnd(),
       exec,
     );
-  }
-
-  // `--max-turns` exits 1 with a complete result on stdout (verified grok 1.0.0,
-  // 2026-08-16). The parsed result wins over the exit code so we keep the
-  // session id and the spend that produced it.
-  if (outcome.kind === 'result') {
-    return successResult(outcome.result, exec, request, ctx.config.structuredContentEnabled);
   }
 
   if (outcome.kind === 'cli-error') {

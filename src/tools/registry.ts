@@ -14,6 +14,7 @@ import { helpTool } from './handlers/help.js';
 import { reviewTool } from './handlers/review.js';
 import { sessionsTool } from './handlers/sessions.js';
 import { statusTool } from './handlers/status.js';
+import { stopTool } from './handlers/stop.js';
 
 const TOOLS: readonly AnyToolDefinition[] = [
   checkTool,
@@ -21,6 +22,7 @@ const TOOLS: readonly AnyToolDefinition[] = [
   reviewTool,
   sessionsTool,
   statusTool,
+  stopTool,
   helpTool,
 ];
 

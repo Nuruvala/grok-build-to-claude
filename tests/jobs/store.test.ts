@@ -13,12 +13,18 @@ import {
   INPUT_MAX_BYTES,
   listRuns,
   patchRun,
+  readLateResult,
+  readProgress,
   readRun,
   readRunInput,
+  readWorkerPid,
   RECORD_MAX_BYTES,
   runDir,
   tailFile,
+  writeLateResult,
+  writeProgress,
   writeTerminal,
+  writeWorkerPid,
 } from '../../src/jobs/store.js';
 
 const tmpDirs: string[] = [];
@@ -90,6 +96,22 @@ describe('createRun / readRun', () => {
 });
 
 describe('patchRun', () => {
+  it('returns null when a terminal.claim exists, even if the record is still non-terminal', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00010-claimref');
+    const claimed = await claimTerminal(stateDir, created.runId, 'stop');
+    assert.equal(claimed.kind, 'claimed');
+    const filePath = path.join(runDir(stateDir, created.runId), 'record.json');
+    const before = await readFile(filePath);
+
+    const patched = await patchRun(stateDir, created.runId, { state: 'running', workerPid: 1 });
+    assert.equal(patched, null);
+    const after = await readFile(filePath);
+    assert.deepEqual(after, before);
+    const read = await readRun(stateDir, created.runId);
+    assert.equal(read?.state, 'starting');
+  });
+
   it('returns null on a terminal record and leaves the file byte-identical', async () => {
     const stateDir = await makeState();
     const created = await seed(stateDir, 'aaa00002-bbbbbbbb');
@@ -268,6 +290,66 @@ describe('listRuns', () => {
       }
     },
   );
+});
+
+describe('progress.json', () => {
+  it('round-trips a sidecar without touching record.json progress fields', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'prg00001-sidecarx');
+    await writeProgress(stateDir, created.runId, {
+      progressCount: 4,
+      lastProgress: '#4 list_dir .',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+    });
+    const progress = await readProgress(stateDir, created.runId);
+    assert.deepEqual(progress, {
+      progressCount: 4,
+      lastProgress: '#4 list_dir .',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+    });
+    const record = await readRun(stateDir, created.runId);
+    assert.ok(record);
+    assert.equal(record.progressCount, 0);
+    assert.equal(record.lastProgress, null);
+  });
+
+  it('returns null when the sidecar is missing or unparseable', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'prg00002-missingx');
+    assert.equal(await readProgress(stateDir, created.runId), null);
+    await writeFile(path.join(runDir(stateDir, created.runId), 'progress.json'), 'not json');
+    assert.equal(await readProgress(stateDir, created.runId), null);
+  });
+});
+
+describe('worker.pid', () => {
+  it('round-trips a pid and returns null when the sidecar is missing or unparseable', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'pid00001-sidecarx');
+    assert.equal(await readWorkerPid(stateDir, created.runId), null);
+    await writeWorkerPid(stateDir, created.runId, 4242);
+    assert.equal(await readWorkerPid(stateDir, created.runId), 4242);
+    await writeFile(path.join(runDir(stateDir, created.runId), 'worker.pid'), 'not-a-pid\n');
+    assert.equal(await readWorkerPid(stateDir, created.runId), null);
+  });
+});
+
+describe('late-result.json', () => {
+  it('round-trips a stored result and returns null when the file is absent', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'lte00001-resultx');
+    assert.equal(await readLateResult(stateDir, created.runId), null);
+    await writeLateResult(stateDir, created.runId, {
+      text: 'partial',
+      meta: { sessionId: 'sess-late', total_cost_usd: 0.01 },
+      isError: false,
+    });
+    const late = await readLateResult(stateDir, created.runId);
+    assert.ok(late);
+    assert.equal(late.text, 'partial');
+    assert.equal(late.meta['sessionId'], 'sess-late');
+    assert.equal(late.isError, false);
+  });
 });
 
 describe('atomic writes', () => {

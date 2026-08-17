@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { labelFor, matchesQuery, resumeCommand, sortByRecency } from '../../src/sessions/select.js';
+import {
+  labelFor,
+  matchesQuery,
+  resumeCommand,
+  SESSION_WINDOW_SLACK_MS,
+  sessionsStartedDuring,
+  sortByRecency,
+} from '../../src/sessions/select.js';
 import type { SessionRecord } from '../../src/sessions/select.js';
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
@@ -114,4 +121,85 @@ describe('resumeCommand', () => {
       'grok -r 01a00a41-8f57-7de2-bb03-caccc61a1f0e',
     );
   });
+});
+
+describe('sessionsStartedDuring', () => {
+  const window = {
+    startedAt: '2026-08-17T12:00:00.000Z',
+    endedAt: '2026-08-17T12:00:20.000Z',
+  };
+
+  function shiftIso(iso: string, deltaMs: number): string {
+    return new Date(Date.parse(iso) + deltaMs).toISOString();
+  }
+
+  const cases: readonly {
+    readonly name: string;
+    readonly records: readonly SessionRecord[];
+    readonly window: { readonly startedAt: string; readonly endedAt: string };
+    readonly expected: readonly string[];
+  }[] = [
+    {
+      name: 'keeps a session created inside the window',
+      records: [record({ id: 'in', createdAt: '2026-08-17T12:00:10.000Z' })],
+      window,
+      expected: ['in'],
+    },
+    {
+      name: 'keeps a session created at the exact lower bound, because startedAt is stamped before spawn',
+      records: [record({ id: 'start', createdAt: window.startedAt })],
+      window,
+      expected: ['start'],
+    },
+    {
+      name: 'drops a session created before the window',
+      records: [record({ id: 'early', createdAt: '2026-08-17T11:59:59.999Z' })],
+      window,
+      expected: [],
+    },
+    {
+      name: 'keeps a session created at endedAt plus slack, because summary.json lags the create',
+      records: [
+        record({ id: 'slack', createdAt: shiftIso(window.endedAt, SESSION_WINDOW_SLACK_MS) }),
+      ],
+      window,
+      expected: ['slack'],
+    },
+    {
+      name: 'drops a session created after the window plus slack',
+      records: [
+        record({ id: 'late', createdAt: shiftIso(window.endedAt, SESSION_WINDOW_SLACK_MS + 1) }),
+      ],
+      window,
+      expected: [],
+    },
+    {
+      name: 'drops a session whose createdAt is unparseable — absent evidence is not evidence',
+      records: [record({ id: 'bad', createdAt: 'not-a-date' })],
+      window,
+      expected: [],
+    },
+    {
+      name: 'returns an empty list for an empty input',
+      records: [],
+      window,
+      expected: [],
+    },
+    {
+      name: 'returns an empty list when the window bounds themselves do not parse',
+      records: [record({ id: 'in', createdAt: '2026-08-17T12:00:10.000Z' })],
+      window: { startedAt: 'not-a-date', endedAt: window.endedAt },
+      expected: [],
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      const matched = sessionsStartedDuring(testCase.records, testCase.window);
+      assert.deepEqual(
+        matched.map((row) => row.id),
+        [...testCase.expected],
+      );
+    });
+  }
 });

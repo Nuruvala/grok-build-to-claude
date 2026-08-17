@@ -78,12 +78,12 @@ describe('MCP protocol', () => {
     assert.ok(client.getServerCapabilities()?.tools);
   });
 
-  it('lists check, grok, review, sessions, status, and help with a description and a valid object input schema each', async () => {
+  it('lists check, grok, review, sessions, status, stop, and help with a description and a valid object input schema each', async () => {
     const { tools } = await client.listTools();
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ['check', 'grok', 'review', 'sessions', 'status', 'help'],
+      ['check', 'grok', 'review', 'sessions', 'status', 'stop', 'help'],
     );
 
     for (const tool of tools) {
@@ -152,6 +152,26 @@ describe('MCP protocol', () => {
     assert.ok(status);
     assert.equal(status.inputSchema.type, 'object');
     assert.equal(status.annotations?.readOnlyHint, true);
+  });
+
+  it('advertises stop with destructiveHint true and treats a bogus id as a successful miss', async () => {
+    const { tools } = await client.listTools();
+    const stop = tools.find((tool) => tool.name === 'stop');
+    assert.ok(stop);
+    assert.equal(stop.inputSchema.type, 'object');
+    const annotations = stop.annotations;
+    assert.ok(annotations);
+    assert.equal(annotations.destructiveHint, true);
+    assert.equal(annotations.readOnlyHint, false);
+    assert.equal(annotations.idempotentHint, true);
+
+    const result = await client.callTool({ name: 'stop', arguments: { runId: 'nope-not-a-run' } });
+    assert.notEqual(result.isError, true);
+    const content = result.content as { text: string; _meta: Record<string, unknown> }[];
+    const [block] = content;
+    assert.ok(block);
+    assert.equal(block._meta['found'], false);
+    assert.match(block.text, /nope-not-a-run/);
   });
 
   it('calls help and returns the grok --help text from the fake', async () => {

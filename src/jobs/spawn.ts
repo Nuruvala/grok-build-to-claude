@@ -14,7 +14,7 @@ import { InvalidArgumentsError, toErrorText } from '../errors.js';
 import { log } from '../log.js';
 import type { ToolContext, ToolResult } from '../types.js';
 import { newRunId } from './record.js';
-import { createRun, finalizeRun, runDir } from './store.js';
+import { createRun, finalizeRun, runDir, writeWorkerPid } from './store.js';
 
 /** Pure: which interpreter arguments and runner path to use, given the module's own filename. */
 export function resolveRunnerLaunch(moduleFileName: string): {
@@ -107,7 +107,17 @@ export async function startBackgroundRun(
         return await failSpawn(ctx, record, spawnError);
       }
 
-      const workerPid = child.pid ?? null;
+      const rawPid = child.pid;
+      const workerPid = typeof rawPid === 'number' && rawPid > 0 ? rawPid : null;
+      // Sidecar lands before startedResult returns a runId, so a caller
+      // cannot ask stop about this run before the pid is findable.
+      if (workerPid !== null) {
+        try {
+          await writeWorkerPid(ctx.config.stateDir, runId, workerPid);
+        } catch (error: unknown) {
+          log.warn(`failed to persist worker pid for ${runId}`, error);
+        }
+      }
       child.unref();
       return startedResult(record, workerPid, ctx.config.structuredContentEnabled);
     } finally {

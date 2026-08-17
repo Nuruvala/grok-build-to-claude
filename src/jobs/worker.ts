@@ -26,6 +26,8 @@ import {
   readRunInput,
   removeRunDir,
   runDir,
+  writeLateResult,
+  writeProgress,
 } from './store.js';
 
 /** Immediate for the log (cheap append); a rename per token delta is waste. */
@@ -45,8 +47,8 @@ export interface RunJobOptions {
   /**
    * Test-only. Invoked the moment the tool settles, before progress is drained
    * and before the terminal write. The callback receives the same flush the
-   * timer would have fired, so a test can enqueue a progress patch at the
-   * instant a late timer would race the terminal record.
+   * timer would have fired; that flush now writes `progress.json`, not the
+   * record, which is why a late timer can no longer lose a terminal write.
    */
   readonly afterTool?: ((flush: () => void) => void | Promise<void>) | undefined;
 }
@@ -101,11 +103,19 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
   }
 
   const startedAt = new Date().toISOString();
-  await patchRun(stateDir, runId, {
+  const patched = await patchRun(stateDir, runId, {
     state: 'running',
     startedAt,
     workerPid: process.pid,
   });
+  if (patched === null) {
+    // A claim is a promise that a terminal write is coming. Invoking the
+    // tool after that promise exists spends the run into a record nobody
+    // will keep.
+    log.info(`running patch refused for ${runId}; exiting without invoking the tool`);
+    const current = await readRun(stateDir, runId);
+    return current?.state ?? 'cancelled';
+  }
 
   const dir = runDir(stateDir, runId);
   const progressLog = createLogAppender(path.join(dir, 'progress.log'), LOG_MAX_BYTES);
@@ -127,9 +137,19 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
       });
   }
 
+  function enqueueProgress(): void {
+    const snapshot = { progressCount, lastProgress, lastProgressAt };
+    writeChain = writeChain
+      .then(() => writeProgress(stateDir, runId, snapshot))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        log.debug('worker progress write failed', error);
+      });
+  }
+
   function flushProgress(): void {
     flushTimer = undefined;
-    enqueuePatch({ progressCount, lastProgress, lastProgressAt });
+    enqueueProgress();
   }
 
   function reportProgress(update: ProgressUpdate): void {
@@ -185,7 +205,7 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
     if (flushTimer !== undefined) {
       clearTimeout(flushTimer);
       flushTimer = undefined;
-      enqueuePatch({ progressCount, lastProgress, lastProgressAt });
+      enqueueProgress();
     }
     await writeChain;
     await progressLog.close();
@@ -229,9 +249,16 @@ async function finishWithResult(
     stopReason,
   });
   if (outcome.kind === 'lost') {
-    // Something else already ended this run (M5b's `stop`). Do not write.
-    // M5b will add preservation of the result here; leave the branch and the
-    // comment, not a half-built file format.
+    // A run cancelled at turn nine has already been paid for, and it may
+    // carry a sessionId that resumes everything it did. Throwing that away
+    // to keep the record tidy would be the same class of loss as the plugin
+    // reporting a session id that never existed — the opposite direction,
+    // same disrespect for what the run actually produced.
+    try {
+      await writeLateResult(stateDir, runId, stored);
+    } catch (error: unknown) {
+      log.debug('failed to preserve late result after a lost terminal claim', error);
+    }
     log.info(`lost terminal claim for ${runId}; another process ended this run`);
     return outcome.record?.state ?? 'cancelled';
   }

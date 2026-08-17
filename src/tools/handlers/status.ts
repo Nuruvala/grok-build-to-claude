@@ -14,8 +14,29 @@ import { z } from 'zod';
 
 import { elapsedMs, formatRunDetail, formatRunHeader, formatRunLine } from '../../jobs/format.js';
 import { displayRecord, STARTUP_GRACE_MS } from '../../jobs/liveness.js';
-import { isCutOff, isTerminal, type RunRecord } from '../../jobs/record.js';
-import { DEFAULT_TAIL_BYTES, listRuns, readRun, runDir, tailFile } from '../../jobs/store.js';
+import {
+  isCutOff,
+  isTerminal,
+  mergeProgress,
+  type RunRecord,
+  type StoredResult,
+} from '../../jobs/record.js';
+import {
+  DEFAULT_TAIL_BYTES,
+  listRuns,
+  readLateResult,
+  readProgress,
+  readRun,
+  runDir,
+  tailFile,
+} from '../../jobs/store.js';
+import {
+  resolveCancelledSession,
+  sessionResolutionLines,
+  sessionResolutionMeta,
+  type CancelledSession,
+} from '../../sessions/recover.js';
+import { resumeCommand } from '../../sessions/select.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
 
@@ -85,8 +106,15 @@ export const statusTool = defineTool({
 async function listMode(limit: number, ctx: ToolContext): Promise<ToolResult> {
   const listed = await listRuns(ctx.config.stateDir, limit);
   const nowMs = Date.now();
-  const records = listed.records.map((record) =>
-    displayRecord(record, nowMs, orphanErrorText(ctx.config.stateDir, record.runId)),
+  const records = await Promise.all(
+    listed.records.map(async (record) => {
+      const progress = await readProgress(ctx.config.stateDir, record.runId);
+      return displayRecord(
+        mergeProgress(record, progress),
+        nowMs,
+        orphanErrorText(ctx.config.stateDir, record.runId),
+      );
+    }),
   );
 
   if (records.length === 0 && listed.unreadable === 0 && !listed.truncated) {
@@ -187,7 +215,7 @@ async function singleMode(input: StatusInput, ctx: ToolContext): Promise<ToolRes
   }
 
   if (isTerminal(record.state)) {
-    return terminalResult(record, ctx);
+    return await terminalResult(record, ctx);
   }
 
   return liveResult(record, ctx, tailBytes);
@@ -196,7 +224,12 @@ async function singleMode(input: StatusInput, ctx: ToolContext): Promise<ToolRes
 async function loadForDisplay(stateDir: string, runId: string): Promise<RunRecord | null> {
   const record = await readRun(stateDir, runId);
   if (record === null) return null;
-  return displayRecord(record, Date.now(), orphanErrorText(stateDir, runId));
+  const progress = await readProgress(stateDir, runId);
+  return displayRecord(
+    mergeProgress(record, progress),
+    Date.now(),
+    orphanErrorText(stateDir, runId),
+  );
 }
 
 function orphanErrorText(stateDir: string, runId: string): string {
@@ -208,23 +241,111 @@ function orphanErrorText(stateDir: string, runId: string): string {
   );
 }
 
-function terminalResult(record: RunRecord, ctx: ToolContext): ToolResult {
+async function terminalResult(record: RunRecord, ctx: ToolContext): Promise<ToolResult> {
   const stored = record.result;
   const header = formatRunDetail(record, Date.now());
-  const body =
-    stored === null ? `${resultlessLead(record)}\n\n${header}` : `${header}\n\n${stored.text}`;
+  const late =
+    record.state === 'cancelled' ? await readLateResult(ctx.config.stateDir, record.runId) : null;
+
+  const knownSession =
+    record.sessionId ??
+    sessionIdFromMeta(stored?.meta ?? {}) ??
+    sessionIdFromMeta(late?.meta ?? {});
+  // Same helper as stop: an hour later the user looks here, not at the
+  // transcript of the stop. A confirmed end-event id still wins.
+  const resolved: CancelledSession =
+    record.state === 'cancelled'
+      ? await resolveCancelledSession({
+          knownSessionId: knownSession,
+          sessionsDir: ctx.config.sessionsDir,
+          cwd: record.cwd,
+          startedAt: record.startedAt,
+          endedAt: record.endedAt,
+        })
+      : { kind: 'none' };
+
+  const body = formatTerminalBody(record, header, stored, late, resolved);
   const storedMeta = stored?.meta ?? {};
-  const meta = Object.freeze({
+  const meta: Record<string, unknown> = {
     ...storedMeta,
     ...runMeta(record),
+    ...sessionResolutionMeta(resolved),
     found: true,
-  });
+  };
+  if (late !== null) {
+    // A cancelled run must never render as a completed one. lateResult is
+    // extra evidence under the cancellation, not a replacement for it.
+    meta['lateResult'] = lateResultMeta(late);
+    const lateSession = sessionIdFromMeta(late.meta);
+    if (lateSession !== null && (meta['sessionId'] === undefined || meta['sessionId'] === null)) {
+      meta['sessionId'] = lateSession;
+      if (meta['sessionIdSource'] === undefined) {
+        meta['sessionIdSource'] = 'result';
+      }
+    }
+  }
   return statusResult({
     text: body,
-    meta,
+    meta: Object.freeze(meta),
     isError: terminalIsError(record),
     ctx,
   });
+}
+
+function formatTerminalBody(
+  record: RunRecord,
+  header: string,
+  stored: StoredResult | null,
+  late: StoredResult | null,
+  resolved: CancelledSession,
+): string {
+  if (record.state === 'cancelled') {
+    // A cancelled run must never render as a completed one, and it must
+    // not silently discard what it produced either. Stored result and late
+    // sidecar are evidence under the cancellation header, never in place
+    // of it.
+    const parts = [resultlessLead(record), '', header];
+    appendCancelledEvidence(parts, stored);
+    appendCancelledEvidence(parts, late);
+    const evidenceHasSession =
+      sessionIdFromMeta(stored?.meta ?? {}) !== null ||
+      sessionIdFromMeta(late?.meta ?? {}) !== null;
+    const extra = sessionResolutionLines(resolved, !evidenceHasSession);
+    if (extra.length > 0) {
+      parts.push('', ...extra);
+    }
+    return parts.join('\n');
+  }
+  if (stored === null) {
+    return `${resultlessLead(record)}\n\n${header}`;
+  }
+  return `${header}\n\n${stored.text}`;
+}
+
+function appendCancelledEvidence(parts: string[], produced: StoredResult | null): void {
+  if (produced === null) return;
+  parts.push('', 'The run also produced a result before it died:');
+  const sessionId = sessionIdFromMeta(produced.meta);
+  if (sessionId !== null) {
+    parts.push(`  ${resumeCommand(sessionId)}`);
+  }
+  if (produced.text !== '') {
+    parts.push('', produced.text);
+  }
+}
+
+function lateResultMeta(late: StoredResult): Record<string, unknown> {
+  const sessionId = sessionIdFromMeta(late.meta);
+  return {
+    ...late.meta,
+    ...(sessionId !== null ? { sessionId } : {}),
+    isError: late.isError,
+  };
+}
+
+function sessionIdFromMeta(meta: Readonly<Record<string, unknown>>): string | null {
+  const value = meta['sessionId'];
+  return typeof value === 'string' && value !== '' ? value : null;
 }
 
 /**

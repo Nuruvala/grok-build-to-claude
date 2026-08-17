@@ -56,7 +56,20 @@ export interface RunRecord {
   readonly error: string | null;
 }
 
-export type RunPatch = Partial<Omit<RunRecord, 'runId' | 'createdAt' | 'schemaVersion' | 'tool'>>;
+export type RunPatch = {
+  readonly [K in keyof Omit<RunRecord, 'runId' | 'createdAt' | 'schemaVersion' | 'tool'>]?:
+    RunRecord[K] | undefined;
+};
+
+/**
+ * Sidecar written only by the worker. Kept off `record.json` so a `stop` from
+ * the server cannot lose a terminal write to a progress rename.
+ */
+export interface RunProgress {
+  readonly progressCount: number;
+  readonly lastProgress: string | null;
+  readonly lastProgressAt: string | null;
+}
 
 export function isTerminal(state: RunState): boolean {
   return TERMINAL_STATES.has(state);
@@ -169,6 +182,30 @@ export function summarize(text: string): string {
   return `${collapsed.slice(0, SUMMARY_MAX_CHARS - 1)}…`;
 }
 
+/** Overlay a progress sidecar onto a record for display. Does not persist. */
+export function mergeProgress(record: RunRecord, progress: RunProgress | null): RunRecord {
+  if (progress === null) return record;
+  return applyPatch(record, {
+    progressCount: progress.progressCount,
+    lastProgress: progress.lastProgress,
+    lastProgressAt: progress.lastProgressAt,
+  });
+}
+
+export function parseRunProgress(value: unknown): RunProgress | null {
+  if (!isRecord(value)) return null;
+  const progressCount = numberField(value, 'progressCount');
+  // An absent sidecar is already null and leaves the record alone. A
+  // present-but-broken one must be null too — defaulting a missing count
+  // to 0 would overlay a fake zero onto display through mergeProgress.
+  if (progressCount === null) return null;
+  return Object.freeze({
+    progressCount,
+    lastProgress: stringField(value, 'lastProgress'),
+    lastProgressAt: stringField(value, 'lastProgressAt'),
+  });
+}
+
 /** Pure merge. `undefined` values are ignored so omission never blanks a field. */
 export function applyPatch(record: RunRecord, patch: RunPatch): RunRecord {
   const next: RunRecord = {
@@ -200,7 +237,7 @@ function pick<T>(patchValue: T | undefined, current: T): T {
   return patchValue;
 }
 
-function parseStoredResult(value: unknown): StoredResult | null {
+export function parseStoredResult(value: unknown): StoredResult | null {
   if (value === null || value === undefined) return null;
   if (!isRecord(value)) return null;
   const metaValue = value['meta'];

@@ -12,7 +12,14 @@ import type { Config } from '../../src/config.js';
 import { isMainModule, parseRunnerArgv } from '../../src/jobs/runner.js';
 import { resolveRunnerLaunch } from '../../src/jobs/spawn.js';
 import { isTerminal, type RunRecord } from '../../src/jobs/record.js';
-import { createRun, listRuns, patchRun, readRun, runDir } from '../../src/jobs/store.js';
+import {
+  createRun,
+  listRuns,
+  patchRun,
+  readRun,
+  readWorkerPid,
+  runDir,
+} from '../../src/jobs/store.js';
 import { grokTool } from '../../src/tools/handlers/grok.js';
 import { statusTool } from '../../src/tools/handlers/status.js';
 import type { ToolContext, ToolResult } from '../../src/types.js';
@@ -206,6 +213,8 @@ describe('background grok', () => {
     const runId = metaOf(started)['runId'];
     assert.equal(typeof runId, 'string');
     trackPid(metaOf(started)['workerPid'] as number | null);
+    const sidecarPid = await readWorkerPid(stateDir, String(runId));
+    assert.equal(sidecarPid, metaOf(started)['workerPid']);
 
     const record = await waitForTerminal(stateDir, String(runId), 15_000);
     assert.equal(record.state, 'completed');

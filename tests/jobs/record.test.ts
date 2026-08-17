@@ -6,7 +6,9 @@ import {
   isCutOff,
   isRunState,
   isTerminal,
+  mergeProgress,
   newRunId,
+  parseRunProgress,
   parseRunRecord,
   RECORD_SCHEMA_VERSION,
   SUMMARY_MAX_CHARS,
@@ -182,6 +184,37 @@ describe('isTerminal / isRunState', () => {
     assert.equal(isCutOff(parsed({ stopReason: 'end_turn' })), false);
     assert.equal(isCutOff(parsed({ stopReason: null })), false);
     assert.equal(isCutOff(parsed({ state: 'failed', stopReason: 'cancelled' })), false);
+  });
+});
+
+describe('mergeProgress', () => {
+  it('overlays sidecar fields and leaves an old record untouched when the sidecar is missing', () => {
+    const record = parsed({ progressCount: 3, lastProgress: '#3 done' });
+    assert.equal(mergeProgress(record, null).progressCount, 3);
+    const merged = mergeProgress(record, {
+      progressCount: 7,
+      lastProgress: '#7 live',
+      lastProgressAt: ISO,
+    });
+    assert.equal(merged.progressCount, 7);
+    assert.equal(merged.lastProgress, '#7 live');
+    assert.equal(record.progressCount, 3);
+  });
+});
+
+describe('parseRunProgress', () => {
+  it('returns null for a non-object and for a sidecar that is missing progressCount', () => {
+    assert.equal(parseRunProgress(null), null);
+    assert.equal(parseRunProgress('nope'), null);
+    assert.equal(parseRunProgress({ lastProgress: '#1' }), null);
+    const parsedProgress = parseRunProgress({
+      progressCount: 1,
+      lastProgress: '#1',
+      lastProgressAt: ISO,
+    });
+    assert.ok(parsedProgress);
+    assert.equal(parsedProgress.progressCount, 1);
+    assert.equal(parsedProgress.lastProgress, '#1');
   });
 });
 

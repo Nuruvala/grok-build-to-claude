@@ -680,6 +680,33 @@ describe('grok streaming progress tracks work, not lifecycle', () => {
 });
 
 describe('grok streaming outcomes', () => {
+  it('does not treat an abort with no end event as a success', async () => {
+    const controller = new AbortController();
+    const pending = runGrok(
+      { prompt: 'hi' },
+      {
+        FAKE_GROK_STDOUT: '{"type":"text","data":"working"}\n',
+        FAKE_GROK_SLEEP_MS: '10000',
+      },
+      {},
+      controller.signal,
+      { progressRequested: true },
+    );
+    const abortAt = Date.now() + 80;
+    while (Date.now() < abortAt) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+    controller.abort();
+    const { result } = await pending;
+
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /cancelled|stream ended before its end event/);
+    assert.equal(result.content[0]?._meta?.['sessionId'], undefined);
+    assert.equal(result.content[0]?._meta?.['stopReason'], undefined);
+  });
+
   it('reports a truncated stream as a partial error with recovered text and no fabricated session id', async () => {
     const { result } = await runStreaming(fixturePath('stream-truncated.ndjson'));
 

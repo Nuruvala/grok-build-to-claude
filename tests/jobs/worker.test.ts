@@ -187,6 +187,39 @@ describe('runJob failure paths', () => {
     assert.match(record.result.text, /partial-out/);
   });
 
+  it('exits without invoking the tool when its running patch is refused because a claim exists', async () => {
+    const stateDir = await makeTmp();
+    const { binary, argvFile } = await installFake({
+      FAKE_GROK_STDOUT: '',
+      FAKE_GROK_STREAM_FILE: STREAM_HAPPY,
+    });
+    const config = isolatedConfig(stateDir, binary);
+    const runId = await seedRun(stateDir, { prompt: 'hi' });
+    const claim = await claimTerminal(stateDir, runId, 'stop');
+    assert.equal(claim.kind, 'claimed');
+
+    const state = await runJob({
+      stateDir,
+      runId,
+      config,
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(state, 'starting');
+    const record = await readRun(stateDir, runId);
+    assert.ok(record);
+    assert.equal(record.state, 'starting');
+    assert.equal(record.workerPid, null);
+    await assert.rejects(
+      () => readFile(argvFile),
+      (error: unknown) => {
+        return (
+          typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+        );
+      },
+    );
+  });
+
   it('returns without writing when the record is already terminal', async () => {
     const stateDir = await makeTmp();
     const { binary } = await installFake({
