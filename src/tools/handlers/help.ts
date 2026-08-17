@@ -45,7 +45,12 @@ export const helpTool = defineTool({
     if (exec.outcome === 'timeout') {
       return errorResult(
         `grok --help timed out after ${Math.round(exec.durationMs)} ms.\n\n` +
-          `Set GROK_MCP_TIMEOUT_MS if the binary is unusually slow.\n` +
+          // Deliberately not "raise GROK_MCP_TIMEOUT_MS": the cap is a Math.min, so
+          // raising that variable cannot move this deadline. Naming a setting that
+          // will not help is the same failure as blaming a turn budget nobody set.
+          `The cap is ${String(HELP_TIMEOUT_CAP_MS)} ms and GROK_MCP_TIMEOUT_MS cannot raise it. ` +
+          'A binary that cannot print its own help in that time is the problem — check ' +
+          'GROK_BINARY and try running grok --help yourself.\n' +
           buffered(exec.stdout, exec.stderr),
       );
     }
