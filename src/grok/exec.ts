@@ -38,6 +38,18 @@ export interface ExecOptions {
   /** Called with each decoded stdout chunk. Used by streaming callers in M2. */
   readonly onStdout?: ((chunk: string) => void) | undefined;
   readonly onStderr?: ((chunk: string) => void) | undefined;
+  /**
+   * Fires synchronously right after `spawn()` returns with a defined `pid` — the
+   * same place `childPid` is captured, so a timeout in that gap still has a
+   * process to signal. Background workers use this to record the grok pid.
+   */
+  readonly onSpawn?: ((pid: number) => void) | undefined;
+  /**
+   * Default: true on POSIX, as today. A background worker passes `false` so the
+   * grok process stays inside the worker's process group; the worker is itself
+   * a group leader, and `kill(-workerPid)` then reaps the whole tree.
+   */
+  readonly detached?: boolean | undefined;
 }
 
 export interface ExecResult {
@@ -75,6 +87,9 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
     let child: ChildProcess | undefined;
+    // Captured for terminate(): a non-detached child is not a process-group
+    // leader, so `kill(-pid)` would target a group that does not exist.
+    const detached = options.detached ?? process.platform !== 'win32';
 
     function cleanup(): void {
       for (const timer of [timeoutTimer, killTimer, drainTimer, forceTimer]) {
@@ -116,9 +131,9 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
       if (settled) return;
       if (outcome === 'timeout' || outcome === 'aborted') return;
       outcome = reason;
-      terminate(child, childPid, 'SIGTERM');
+      terminate(child, childPid, 'SIGTERM', detached);
       killTimer = setTimeout(() => {
-        terminate(child, childPid, 'SIGKILL');
+        terminate(child, childPid, 'SIGKILL', detached);
         // SIGKILL cannot be caught, so a child that still has not closed is not the thing keeping
         // us waiting — something outside our process group is holding the pipes. Report what was
         // buffered rather than waiting on an EOF that may never come.
@@ -147,7 +162,7 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
         stdio: ['ignore', 'pipe', 'pipe'],
         // POSIX: child leads its own process group so we can kill the whole tree.
         // Windows process-group semantics differ — see terminate().
-        detached: process.platform !== 'win32',
+        detached,
       });
     } catch (error: unknown) {
       outcome = 'spawn-failed';
@@ -160,6 +175,9 @@ export function execGrok(options: ExecOptions): Promise<ExecResult> {
     // a tick away. A timeout or abort firing in that gap would otherwise find `childPid`
     // undefined, signal nothing, and leave us waiting on a child nobody asked to stop.
     childPid = child.pid;
+    if (childPid !== undefined) {
+      options.onSpawn?.(childPid);
+    }
 
     child.once('spawn', () => {
       spawned = true;
@@ -222,12 +240,15 @@ function terminate(
   child: ChildProcess | undefined,
   pid: number | undefined,
   signal: NodeJS.Signals,
+  detached: boolean,
 ): void {
   if (pid === undefined) return;
   try {
-    if (process.platform === 'win32') {
-      // Windows has no POSIX process-group kill. child.kill() is the fallback;
-      // grandchildren started independently of the job object may survive.
+    if (process.platform === 'win32' || !detached) {
+      // Windows has no POSIX process-group kill. A non-detached child is not a
+      // group leader either — `kill(-pid)` fails ESRCH and silently kills nothing.
+      // child.kill() is the fallback; grandchildren started independently of
+      // the job object may survive.
       child?.kill(signal);
       return;
     }

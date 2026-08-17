@@ -46,7 +46,33 @@ export interface GrokRunRequest {
 }
 
 export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promise<ToolResult> {
+  const sink = ctx.runSink;
   const stream = ctx.progressRequested ? startStreamSession(ctx.reportProgress) : undefined;
+
+  const onStdout =
+    sink === undefined && stream === undefined
+      ? undefined
+      : (chunk: string) => {
+          sink?.stdout(chunk);
+          stream?.onStdout(chunk);
+        };
+  const onStderr =
+    sink === undefined
+      ? undefined
+      : (chunk: string) => {
+          sink.stderr(chunk);
+        };
+  const onSpawn =
+    sink === undefined
+      ? undefined
+      : (pid: number) => {
+          sink.started({
+            argv: request.args,
+            childPid: pid,
+            model: request.model,
+            permissionLevel: request.permissionLevel,
+          });
+        };
 
   let exec: ExecResult;
   try {
@@ -55,7 +81,14 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
       args: request.args,
       timeoutMs: ctx.config.timeoutMs,
       signal: ctx.signal,
-      ...(stream === undefined ? {} : { onStdout: stream.onStdout }),
+      // A sink must see raw chunks even when the client did not ask for
+      // streaming; compose the two listeners rather than forking the branch.
+      ...(onStdout === undefined ? {} : { onStdout }),
+      ...(onStderr === undefined ? {} : { onStderr }),
+      ...(onSpawn === undefined ? {} : { onSpawn }),
+      // Foreground (no sink) keeps today's default. A worker passes a sink and
+      // must not make grok a group leader — see exec.ts `detached`.
+      ...(sink === undefined ? {} : { detached: false }),
     });
     stream?.drain();
   } finally {

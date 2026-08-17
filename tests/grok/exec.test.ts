@@ -49,6 +49,8 @@ function execFake(
     maxBufferBytes: options.maxBufferBytes,
     onStdout: options.onStdout,
     onStderr: options.onStderr,
+    onSpawn: options.onSpawn,
+    detached: options.detached,
     env: isolatedEnv(script),
   });
 }
@@ -347,6 +349,47 @@ describe('execGrok UTF-8 decoding across chunk boundaries', () => {
       `expected at least two onStdout callbacks so the split is observed, got ${String(chunks.length)}: ${JSON.stringify(chunks)}`,
     );
   });
+});
+
+describe('execGrok onSpawn and detached', () => {
+  it('fires onSpawn synchronously with the child pid after spawn returns', async () => {
+    const pids: number[] = [];
+    const result = await execFake(
+      { FAKE_GROK_STDOUT: 'ok' },
+      {
+        onSpawn: (pid) => {
+          pids.push(pid);
+        },
+      },
+    );
+    assert.equal(result.outcome, 'exited');
+    assert.equal(pids.length, 1);
+    assert.ok(pids[0] !== undefined && pids[0] > 0);
+  });
+
+  it(
+    'kills a non-detached child on timeout via child.kill, not process-group kill',
+    { skip: process.platform === 'win32', timeout: 10_000 },
+    async () => {
+      const pids: number[] = [];
+      const result = await execFake(
+        { FAKE_GROK_STDOUT: 'so far', FAKE_GROK_SLEEP_MS: '10000' },
+        {
+          timeoutMs: 200,
+          detached: false,
+          onSpawn: (pid) => {
+            pids.push(pid);
+          },
+        },
+      );
+      assert.equal(result.outcome, 'timeout');
+      assert.equal(result.stdout, 'so far');
+      const pid = pids[0];
+      assert.ok(pid !== undefined);
+      await waitUntilDead(pid, 2000);
+      assertDead(pid);
+    },
+  );
 });
 
 describe('execGrok stream callbacks', () => {

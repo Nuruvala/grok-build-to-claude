@@ -33,6 +33,21 @@ export interface ProgressUpdate {
   message?: string;
 }
 
+/**
+ * Present only inside a background worker. Lets the shared run core report what it is doing to
+ * something other than an MCP client. A foreground call leaves it undefined and pays nothing.
+ */
+export interface RunSink {
+  readonly started: (info: {
+    readonly argv: readonly string[];
+    readonly childPid: number | null;
+    readonly model: string | null;
+    readonly permissionLevel: string;
+  }) => void;
+  readonly stdout: (chunk: string) => void;
+  readonly stderr: (chunk: string) => void;
+}
+
 export interface ToolContext {
   readonly config: Config;
   /** Aborted when the client cancels the request or the transport closes. */
@@ -47,6 +62,11 @@ export interface ToolContext {
    * this to choose a more expensive observable execution path only when it will be observed.
    */
   readonly progressRequested: boolean;
+  /**
+   * Present only inside a background worker. Lets the shared run core report what it is doing to
+   * something other than an MCP client. A foreground call leaves it undefined and pays nothing.
+   */
+  readonly runSink?: RunSink | undefined;
 }
 
 /**
