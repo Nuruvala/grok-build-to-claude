@@ -11,10 +11,10 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M4 is complete: the server runs real headless Grok agents, streams progress
-> while they run, reviews git diffs, lists the sessions those runs created, and reports session,
-> usage, and cost. The `websearch`, `status`, and `stop` tools are on the way — see
-> [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M5a is complete: the server runs real headless Grok agents in the foreground or
+> detached in the background, streams progress while they run, reviews git diffs, lists the sessions
+> those runs created, and reports session, usage, and cost. The `stop` and `websearch` tools are on
+> the way — see [ROADMAP.md](ROADMAP.md).
 
 ## Progress
 
@@ -107,11 +107,12 @@ child process untouched.
 | ---------- | ---------- | ----------------------------------------------------------------------------------------------- |
 | `grok`     | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
 | `review`   | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
+| `status`   | always     | Poll a background run, or list recent ones                                                      |
 | `sessions` | always     | List, search, and look up the Grok sessions on this machine                                     |
 | `check`    | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
 | `help`     | yes        | `grok --help` passthrough                                                                       |
 
-`websearch`, `status`, and `stop` are still on the roadmap.
+`stop` and `websearch` are still on the roadmap.
 
 ### `review`
 
@@ -155,6 +156,43 @@ design.
 A review that reaches for a shell is refused, not killed. In headless mode an unapprovable tool
 request cancels the entire run while the CLI still exits 0, so `review` denies the shell and edit
 tools outright — the model is told no and finishes its review instead of dying mid-sentence.
+
+### Background runs and `status`
+
+A long agent run does not have to occupy your client. Pass `background: true` to `grok` or `review`
+and the call returns a `runId` immediately, while a detached worker process runs the job to
+completion:
+
+```
+> have grok refactor the parser in the background
+> status
+> status the run from a minute ago and wait 30s for it
+```
+
+The run belongs to the machine, not to this server: it keeps going if your MCP client disconnects,
+if the server restarts, or if you close your editor. Records live under `GROK_MCP_STATE_DIR`, one
+directory per run.
+
+**`status` on a finished run returns what the synchronous call would have returned** — same text,
+same metadata, same error flag. Background is a transport for a tool call, not a second
+implementation of one. While a run is live you get its state, elapsed time, both process ids, and
+the tail of its progress log; `waitMs` blocks for up to two minutes and forwards progress
+notifications as they arrive. A timed-out wait is not an error.
+
+Two kinds of dishonesty are ruled out by construction. A run whose worker process no longer exists
+is reported as `abandoned` rather than as still running — the machine rebooted, or something killed
+it. And a run that finished early is labelled as such:
+
+```
+mfk2p1x9-3ac71f0b  completed (cut off: cancelled)  grok  4m 12s  refactor the parser
+```
+
+Validation still happens before you get a `runId`: a request above `GROK_MCP_PERMISSION_CEILING`, or
+a contradictory pair of session flags, is rejected as a failed call rather than accepted and then
+failed in a process nobody is watching.
+
+There is no `stop` tool yet — a background run ends when it finishes or when it hits
+`GROK_MCP_TIMEOUT_MS`.
 
 ### `sessions`
 

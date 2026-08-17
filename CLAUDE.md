@@ -537,7 +537,13 @@ child process untouched.
 
 ## Current state
 
-M1–M4 are complete: `check`, `help`, `grok`, `review`, and `sessions` all ship, with progress
-streaming, structured review findings, and session listing backed by the CLI's own on-disk store.
-`websearch`, `status`, and `stop` remain. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones
-and acceptance criteria.
+M1–M5a are complete: `check`, `help`, `grok`, `review`, `sessions`, and `status` all ship, with
+progress streaming, structured review findings, session listing backed by the CLI's own on-disk
+store, and background runs that survive a restart of this server. `stop` (M5b) and `websearch`
+remain. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
+
+The background-run design has one constraint a future change must respect: `record.json` is
+read-modify-written, so it may only ever have one writer at a time. `finalizeRun` and the worker's
+drain-before-finalize order are what make that true today, and M5b has to extend it across processes
+— `stop` finalizes from the server while the worker is still patching progress, and no drain on the
+worker's side can anticipate that.

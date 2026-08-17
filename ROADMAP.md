@@ -373,7 +373,13 @@ destructive session tool needs its own thinking about confirmation.
 
 ## M5 — Background runs: `status`, `stop`
 
-Where this server surpasses `codex-mcp-server`, which is synchronous-only.
+Where this server surpasses `codex-mcp-server`, which is synchronous-only. Split in two: M5a is the
+infrastructure and `status`, M5b is `stop`.
+
+### M5a — background runs and `status` ✅
+
+Shipped 2026-08-17. `grok` and `review` take `background: true` and return a `runId`; a detached
+worker runs the job to completion and `status` polls it.
 
 **Deliverables**
 
@@ -384,15 +390,76 @@ Where this server surpasses `codex-mcp-server`, which is synchronous-only.
 - `src/jobs/runner.ts` — detached worker that streams the run to a log file and writes the terminal
   record.
 - `status` tool: poll one run or list recent runs; optional `waitMs` to block briefly.
-- `stop` tool: terminate the whole process tree, worker and child; claim the terminal state under a
-  lock so a finishing worker cannot overwrite `cancelled` with `completed`.
 
 **Acceptance**
 
-- Restarting the MCP server mid-run leaves `status` still able to report and `stop` still able to
-  kill.
-- Concurrent `stop` and natural completion resolve to exactly one terminal state.
+- Restarting the MCP server mid-run leaves `status` still able to report.
 - Two concurrent background runs in the same repo do not clobber each other's records.
+
+**Delivered.** Both criteria pass, the first by launching a run from a node process that exits the
+moment the call resolves and then polling from a different process. Verified end to end against grok
+1.0.4: the launcher exited, the worker finished in 2s, `status` replayed the model's text, and the
+session id it reported was found by the `sessions` tool immediately afterward.
+
+**Background is a transport, not a second implementation.** The worker re-enters `invokeTool` with
+the same validated input, so `status` on a finished run returns what the synchronous call would have
+returned — same text, same `_meta`, same error flag. Everything a background run gains (progress
+lines, a stored argv, a pid) comes from the same `runGrok` path the foreground uses, through a
+`runSink` on `ToolContext` that a foreground call simply leaves undefined.
+
+Validation stays synchronous: a session conflict or a request above the permission ceiling is
+rejected as a failed call, never as a `runId` for a run that will die a second later.
+
+**One record, one writer at a time.** `record.json` is read-modify-written, so the whole design
+rests on exclusive ownership: the server writes it once at creation and never again, the worker owns
+it while it runs, and the terminal transition belongs to whoever wins a single
+`open(terminal.claim, 'wx')` — one syscall decides, with no lock to time out. Three mechanisms
+enforce that rather than assuming it, and each of them exists because the first cut got it wrong:
+
+- **`finalizeRun` claims, writes, and unlinks the claim if the write does not land.** A claim is a
+  promise to write a terminal state; a claimant that cannot keep it has to give it back. Without
+  this, a claim taken before a failed write left a run that _no process could ever terminalise_ —
+  the worker's error path, `status`, and M5b's `stop` would all get `lost` and give up.
+- **The worker drains every in-flight patch before it finalizes.** A progress flush that had already
+  read the record could otherwise rename its version over the terminal one: the result gone, the
+  state back to `running`, and the claim already spent. A forced interleaving lost the record in 9
+  of 200 attempts before the fix and 0 of 25 after.
+- **`status` derives an orphan's `abandoned` state for display and persists nothing.** That keeps
+  its `readOnlyHint: true` honest, makes list-mode reconciliation free, and — the real reason —
+  keeps a third writer off the record. Retention sweeps a dead non-terminal record once it ages out.
+
+**Found by reviewing the M5a diff with the repo's own `review` tool, and fixed.** Beyond the three
+above: a worker could exit without the record ever reaching a terminal state (a prompt over
+`INPUT_MAX_BYTES` was written, handed back a `runId`, and then silently abandoned by a worker that
+could not read it back); `createRun` now enforces that cap at the call. A `failed` or `abandoned`
+run polled as `isError: false`, because the flag was read only from a stored result and those runs
+have none — the foreground equivalent throws. And **a cut-off run was stored as `completed`**:
+`review` passes an `isError` callback that catches a non-`end_turn` stop, `grok` deliberately does
+not, so a permission-cancelled run was recorded as a clean finish with the only evidence a footnote
+in the body. The replayed `isError` still matches the foreground exactly; the _state label_ now
+reports `completed (cut off: cancelled)`. The flag replays the tool, the label describes the run.
+
+**Left open, deliberately.** The store primitives remain last-writer-wins — `finalizeRun` and the
+drain make the production paths safe, but the invariant is stated at the call site rather than
+enforced by the file format. M5b has to close that properly, because `stop` finalizes from the
+server process while the worker is still patching progress, and no drain on the worker's side can
+see it coming. A generation counter checked at write time, or moving progress out of `record.json`
+entirely, is the M5b design problem.
+
+### M5b — `stop`
+
+**Deliverables**
+
+- `stop` tool: terminate the whole process tree, worker and child; claim the terminal state under a
+  lock so a finishing worker cannot overwrite `cancelled` with `completed`.
+- Preserve a result that lost the terminal claim: a run cancelled at turn nine has been paid for and
+  may carry a session id that resumes everything it did.
+- Close the cross-process write race described above.
+
+**Acceptance**
+
+- Restarting the MCP server mid-run leaves `stop` still able to kill.
+- Concurrent `stop` and natural completion resolve to exactly one terminal state.
 
 ---
 
