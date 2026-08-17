@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -226,6 +226,27 @@ describe('background grok', () => {
     assert.match(textOf(polled), new RegExp(sync.content[0]?.text ?? 'NOPE'));
     assert.equal(metaOf(polled)['state'], 'completed');
   });
+
+  it(
+    'opens the worker stdio log owner-only, like the rest of the run directory',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const stateDir = await makeTmp();
+      const binary = await installFake({
+        FAKE_GROK_STDOUT: '',
+        FAKE_GROK_STREAM_FILE: STREAM_HAPPY,
+      });
+      const config = isolatedConfig(stateDir, binary);
+
+      const started = await grokTool.handler({ prompt: 'hi', background: true }, ctxFor(config));
+      const runId = String(metaOf(started)['runId']);
+      trackPid(metaOf(started)['workerPid'] as number | null);
+      await waitForTerminal(stateDir, runId, 15_000);
+
+      const info = await stat(path.join(runDir(stateDir, runId), 'worker.log'));
+      assert.equal(info.mode & 0o777, 0o600);
+    },
+  );
 });
 
 describe('acceptance: run survives the launcher exiting', () => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -38,6 +38,11 @@ async function makeState(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+async function fileMode(filePath: string): Promise<number> {
+  const info = await stat(filePath);
+  return info.mode & 0o777;
+}
 
 async function seed(
   stateDir: string,
@@ -349,6 +354,43 @@ describe('late-result.json', () => {
     assert.equal(late.text, 'partial');
     assert.equal(late.meta['sessionId'], 'sess-late');
     assert.equal(late.isError, false);
+  });
+});
+
+describe('private file modes', { skip: process.platform === 'win32' }, () => {
+  it('creates a run directory as 0700 so other local users cannot read the prompt', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'mod00001-rundirxx');
+    assert.equal(await fileMode(runDir(stateDir, created.runId)), 0o700);
+  });
+
+  it('writes record.json and input.json as 0600', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'mod00002-jsonxxxx');
+    const dir = runDir(stateDir, created.runId);
+    assert.equal(await fileMode(path.join(dir, 'record.json')), 0o600);
+    assert.equal(await fileMode(path.join(dir, 'input.json')), 0o600);
+  });
+
+  it('writes the progress append sidecar as 0600 once written', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'mod00003-appendxx');
+    const filePath = path.join(runDir(stateDir, created.runId), 'progress.log');
+    const appender = createLogAppender(filePath, 1024);
+    appender.write('step\n');
+    await appender.close();
+    assert.equal(await fileMode(filePath), 0o600);
+  });
+
+  it('writes the terminal claim file as 0600', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'mod00004-claimxxx');
+    const claimed = await claimTerminal(stateDir, created.runId, 'test');
+    assert.equal(claimed.kind, 'claimed');
+    assert.equal(
+      await fileMode(path.join(runDir(stateDir, created.runId), 'terminal.claim')),
+      0o600,
+    );
   });
 });
 

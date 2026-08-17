@@ -14,7 +14,7 @@ import { InvalidArgumentsError, toErrorText } from '../errors.js';
 import { log } from '../log.js';
 import type { ToolContext, ToolResult } from '../types.js';
 import { newRunId } from './record.js';
-import { createRun, finalizeRun, runDir, writeWorkerPid } from './store.js';
+import { createRun, finalizeRun, RUN_FILE_MODE, runDir, writeWorkerPid } from './store.js';
 
 /** Pure: which interpreter arguments and runner path to use, given the module's own filename. */
 export function resolveRunnerLaunch(moduleFileName: string): {
@@ -70,7 +70,9 @@ export async function startBackgroundRun(
     const { runnerPath, nodeArgs } = resolveRunnerLaunch(fileURLToPath(import.meta.url));
     const logPath = path.join(runDir(ctx.config.stateDir, runId), 'worker.log');
 
-    const logHandle = await open(logPath, 'a');
+    // Owner-only, same as everything else in the run directory: this is the worker's
+    // stdout and stderr, and a crash puts prompt fragments in it.
+    const logHandle = await open(logPath, 'a', RUN_FILE_MODE);
     try {
       const child = spawn(
         process.execPath,

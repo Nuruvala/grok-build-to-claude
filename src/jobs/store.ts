@@ -76,6 +76,15 @@ const PROGRESS_FILE = 'progress.json';
 const LATE_RESULT_FILE = 'late-result.json';
 const WORKER_PID_FILE = 'worker.pid';
 const CLAIM_FILE = 'terminal.claim';
+/**
+ * A run record holds the prompt and, for `review`, the whole diff. New
+ * directories are 0700 and new files 0600 so other local users cannot read
+ * them. `mode` is a floor — umask still applies — and is ignored on Windows.
+ */
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+/** For the worker's own stdio log, which `spawn.ts` opens outside this module. */
+export const RUN_FILE_MODE = FILE_MODE;
 const LOST_CLAIM_RETRIES = 5;
 const LOST_CLAIM_WAIT_MS = 20;
 
@@ -347,7 +356,7 @@ export async function claimTerminal(
 ): Promise<ClaimOutcome> {
   const claimPath = path.join(runDir(stateDir, runId), CLAIM_FILE);
   try {
-    const handle = await open(claimPath, 'wx');
+    const handle = await open(claimPath, 'wx', FILE_MODE);
     try {
       await handle.writeFile(
         `${JSON.stringify({ claimant, at: new Date().toISOString() })}\n`,
@@ -455,7 +464,7 @@ export function createLogAppender(
       }
       bytes = 0;
     }
-    handle = await open(filePath, 'a');
+    handle = await open(filePath, 'a', FILE_MODE);
     if (bytes >= maxBytes) {
       truncated = true;
     }
@@ -575,7 +584,7 @@ async function writeTextAtomic(filePath: string, text: string): Promise<void> {
   tmpSerial += 1;
   const tmpPath = `${filePath}.${process.pid}.${tmpSerial}.tmp`;
   try {
-    await writeFile(tmpPath, text, 'utf8');
+    await writeFile(tmpPath, text, { encoding: 'utf8', mode: FILE_MODE });
     await rename(tmpPath, filePath);
   } catch (error: unknown) {
     try {
@@ -619,7 +628,7 @@ async function readBounded(
 }
 
 async function mkdirp(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: DIR_MODE });
 }
 
 function freezeListed(listed: ListedRuns): ListedRuns {
