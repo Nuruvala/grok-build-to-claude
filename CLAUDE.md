@@ -349,6 +349,68 @@ of built-in tool ids. `--allowedTools` aliases `--allow` the same way. A hyphen 
 unrelated flags you get, and neither errors on the other's argument shape — verified in
 `grok --help` on 1.0.4. We emit `--disallowed-tools` and `--allow`/`--deny`.
 
+### Web search
+
+Measured on 1.0.4 on 2026-08-17. `grok --help` has exactly one web-related flag —
+`--disable-web-search` ("Disable web search and web fetch tools"). There is no result-count flag, no
+depth flag, and no way to force a search. **Result count and depth are prompt shaping, not
+configuration.**
+
+This account's web and X tool ids, from a run asked to enumerate its own tools: `web_search`,
+`web_fetch`, `open_page`, `open_page_with_find`, `x_user_search`, `x_semantic_search`,
+`x_keyword_search`, `x_thread_fetch`.
+
+- **A web search is a server-side tool call, and the `tool_call` event carries no query.** It
+  arrives as `rawInput: {"variant":"WebSearch","backend":true}`, with `title: "Web search:"` and
+  nothing after the colon. The query and the URLs land on the matching `tool_call_update`, under
+  `rawOutput.action`:
+
+  ```jsonc
+  {"action":{"type":"search","query":"latest stable Node.js release version",
+             "sources":[{"type":"url","url":"https://nodejs.org/en"}, …]}}
+  {"action":{"type":"open_page","url":"https://nodejs.org/en/about/previous-releases"}}
+  ```
+
+  `action.type` is not a closed set — route the unrecognised to a catch-all, as with event tags.
+  `sources` length is backend-controlled and varied between 5 and 10 on identical flags. A
+  mid-flight update carries `rawOutput: null`, so requiring a record is the natural "this call
+  returned something" filter.
+
+- **One web tool call is not one search.** A single run made 9 `WebSearch` calls that decomposed
+  into 6 searches and 3 page opens. Report the two separately or a caller reads three times the
+  research that happened.
+
+- **X search is a different shape and carries no sources at all.** `rawInput.variant` is
+  `"XSearch"`, and the update's `rawOutput` has no `action` — it is
+  `{call_id, input, name: "x_keyword_search", id}`, where **`input` is a JSON string**, not an
+  object. The query is recoverable; the posts it found are not.
+
+- **`usage` has no web-search counter.** No `server_tool_use`, no `web_search_requests`. A run with
+  two searches reported only the ordinary token fields, and `total_tokens` (47377) exceeded
+  `input + output` (28305) — server-side tool tokens are inside the total but never itemised. The
+  stream is the only place a search count exists, which is why a tool that reports one must run
+  `streaming-json` whether or not a client asked for progress.
+
+- **`--disable-web-search` does not stop the model researching.** Given the flag and a question
+  needing current facts, it fell through to `x_keyword_search` / `x_semantic_search`, answered
+  confidently, and cited `https://x.com/nodejs/status/…`. Exit 0, `end_turn`, no warning anywhere.
+  So "no web results" is undetectable from the answer and detectable only by counting what the
+  stream did. The same run first tried `curl` through `run_terminal_command`, took our `--deny`
+  refusal, said _"Bash is blocked here, so I'm checking recent official announcements instead"_, and
+  finished — another instance of a deny rule being recoverable where a permission prompt is fatal.
+
+- **A search run finishes inside one turn.** A 1-query run and a 6-query run both reported
+  `num_turns: 1`, because the searches happen within a turn rather than across turns. `--max-turns`
+  is therefore almost never why a search run comes back short, and advising a caller to raise it
+  sends them to spend money on the wrong thing.
+
+- **Depth is worth what it costs, and it costs.** Same question, same flags, prompt-shaped two ways:
+  one round of searching gave 1 query, 2 pages, a 10-URL pool and
+  $0.028; "search more than once,
+  from different angles" gave 6 queries, 3 pages, a 26-URL pool and $0.069.
+  Asking for "about 3 distinct sources" produced 4. Prompt shaping moves these numbers reliably; it
+  does not pin them.
+
 ### Known drift and gotchas
 
 - **`grok import` does not exist in 1.0.0 or 1.0.4.** The bundled plugin's `/grok-build:import` and
@@ -424,13 +486,13 @@ unrelated flags you get, and neither errors on the other's argument shape — ve
    error, or return a session id Grok did not confirm. This is the reliability contract from "Why
    this exists" — treat a violation as a bug even when the happy path passes.
 
-## Planned tool surface
+## Tool surface
 
 | Tool        | Read-only   | Purpose                                                                                                                                      |
 | ----------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `grok`      | default yes | Headless run. Prompt, session resume/continue, model, effort, sandbox, permission mode, cwd, tool allow/deny, max turns, optional background |
 | `review`    | yes         | Code review of working tree / `--base <ref>` / `--commit <sha>`, plan mode + read-only sandbox, optional `--json-schema` structured findings |
-| `websearch` | yes         | Web-search-forced prompt with result-count and depth shaping                                                                                 |
+| `websearch` | yes         | Web research with prompt-shaped count and depth, reporting the searches and sources the run actually used                                    |
 | `sessions`  | yes         | List and search real Grok sessions from `~/.grok/sessions`                                                                                   |
 | `status`    | yes         | Poll a background run                                                                                                                        |
 | `stop`      | no          | Terminate a background run's process tree                                                                                                    |
@@ -549,12 +611,14 @@ child process untouched.
 
 ## Current state
 
-M1–M5 are complete: `check`, `help`, `grok`, `review`, `sessions`, `status`, and `stop` all ship,
-with progress streaming, structured review findings, session listing backed by the CLI's own on-disk
-store, and background runs that survive a restart of this server. `websearch` (M6) remains. Licensed
-MIT. See [ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
+M1–M6 are complete, so the whole tool surface ships: `check`, `help`, `grok`, `review`, `websearch`,
+`sessions`, `status`, and `stop`, with progress streaming, structured review findings, session
+listing backed by the CLI's own on-disk store, and background runs that survive a restart of this
+server. M7 is the public release — docs, packaging, publishing. Licensed MIT. See
+[ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
 
-Two constraints in the background-run design that a future change must respect:
+Three constraints a future change must respect. The first two are the background-run design; the
+third is what `websearch` added:
 
 - **`record.json` is read-modify-written, so it may only ever have one writer at a time.** M5b made
   that structural rather than conventional: progress, the worker pid, and a result that lost the
@@ -567,3 +631,11 @@ Two constraints in the background-run design that a future change must respect:
   and `killed` may write `cancelled`. Every other outcome releases the claim and leaves the record
   non-terminal. A `cancelled` record next to a live process is the failure mode this tool exists to
   avoid, not an acceptable approximation of one.
+- **A field that names an activity must count the activity, not the attempt.** `websearch` reports
+  `searchPerformed` only when sources came back, and separates `webToolCalls` (started) from
+  `webSearches` (returned) because a call is not a result. The reason is measured: with web search
+  unavailable the model answers from X, confidently and with citations, exiting 0 — so `_meta` is
+  the only channel that can tell a caller where an answer came from, and every key in it has to mean
+  exactly what its name says. The same rule made handler meta reach the error and partial envelopes,
+  with `sessionId` and `resumeCommand` stripped so no non-success path can gain a session Grok never
+  confirmed.

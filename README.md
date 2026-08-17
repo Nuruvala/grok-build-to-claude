@@ -11,10 +11,11 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M5 is complete: the server runs real headless Grok agents in the foreground or
-> detached in the background, streams progress while they run, stops a run on request, reviews git
-> diffs, lists the sessions those runs created, and reports session, usage, and cost. The
-> `websearch` tool is on the way — see [ROADMAP.md](ROADMAP.md).
+> **Status: early.** The tool surface is complete. The server runs real headless Grok agents in the
+> foreground or detached in the background, streams progress while they run, stops a run on request,
+> reviews git diffs, researches questions on the web, lists the sessions those runs created, and
+> reports session, usage, and cost. What remains is the public release itself — docs, packaging, and
+> publishing. See [ROADMAP.md](ROADMAP.md).
 
 ## Progress
 
@@ -103,17 +104,16 @@ child process untouched.
 
 ## Tools
 
-| Tool       | Read-only  | Purpose                                                                                         |
-| ---------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `grok`     | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
-| `review`   | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
-| `status`   | always     | Poll a background run, or list recent ones                                                      |
-| `stop`     | no         | Terminate a background run's process tree                                                       |
-| `sessions` | always     | List, search, and look up the Grok sessions on this machine                                     |
-| `check`    | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
-| `help`     | yes        | `grok --help` passthrough                                                                       |
-
-`websearch` is still on the roadmap.
+| Tool        | Read-only  | Purpose                                                                                         |
+| ----------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `grok`      | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
+| `review`    | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
+| `websearch` | always     | Research a question on the web, and report which searches and sources it actually used          |
+| `status`    | always     | Poll a background run, or list recent ones                                                      |
+| `stop`      | no         | Terminate a background run's process tree                                                       |
+| `sessions`  | always     | List, search, and look up the Grok sessions on this machine                                     |
+| `check`     | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
+| `help`      | yes        | `grok --help` passthrough                                                                       |
 
 ### `review`
 
@@ -158,11 +158,47 @@ A review that reaches for a shell is refused, not killed. In headless mode an un
 request cancels the entire run while the CLI still exits 0, so `review` denies the shell and edit
 tools outright — the model is told no and finishes its review instead of dying mid-sentence.
 
+### `websearch`
+
+```
+> websearch: what changed in the latest Bun release?
+> search the web for how Postgres handles advisory lock contention, in depth
+```
+
+`numResults` (1–50) and `searchDepth` (`basic` or `full`) shape the prompt — the `grok` CLI has no
+flags for either, and neither parameter pretends otherwise. They do work: the same question asked at
+`basic` made one search across two pages, and at `full` made six searches across three, for two and
+a half times the cost.
+
+**The result tells you what was actually looked up**, not just what the model wrote:
+
+```
+[1 web search, 9 sources]
+```
+
+with `_meta` carrying `webSearches`, `webToolCalls`, `searchQueries`, `sources`, `sourceCount`,
+`pagesOpened`, and `searchPerformed`. That matters more than it sounds. Grok can research through
+web search or through X, and when the web is unavailable it will quietly do the second — answering
+confidently, citing `x.com`, exiting successfully. The prose gives you no way to tell. So a run that
+searched X and not the web says so in its first line and reports `xSearches` separately, and a run
+where nothing came back at all is an error rather than a confident-looking answer from the model's
+own memory:
+
+```
+No search ran. The answer below is the model's own prior knowledge, not current sources.
+```
+
+`searchPerformed` means sources came back — not that a search was attempted. A search that started
+and never returned, or returned an empty result set, is reported as what it was.
+
+Like `review`, `websearch` is **always read-only** and takes no `permission`, `write`, or `yolo`
+argument. It never passes `--disable-web-search`.
+
 ### Background runs, `status`, and `stop`
 
-A long agent run does not have to occupy your client. Pass `background: true` to `grok` or `review`
-and the call returns a `runId` immediately, while a detached worker process runs the job to
-completion:
+A long agent run does not have to occupy your client. Pass `background: true` to `grok`, `review`,
+or `websearch` and the call returns a `runId` immediately, while a detached worker process runs the
+job to completion:
 
 ```
 > have grok refactor the parser in the background

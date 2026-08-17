@@ -513,18 +513,78 @@ requires a real `end` event, so a cut-off run cannot become a finished one.
 
 ---
 
-## M6 — `websearch`
+## M6 — `websearch` ✅
+
+Shipped 2026-08-17. `websearch` researches a question and reports what it actually looked up.
 
 **Deliverables**
 
 - Web-search-shaped prompt with `numResults` (1–50) and `searchDepth` (`basic` | `full`).
 - Read-only defaults; never pass `--disable-web-search`.
-- Surface `server_tool_use.web_search_requests` from the result usage when present.
+- ~~Surface `server_tool_use.web_search_requests` from the result usage when present.~~ **The field
+  does not exist.** See below.
 
 **Acceptance**
 
 - Returns cited results in an integration test; degrades with a clear message when the account has
   web search disabled.
+
+**Delivered**, with the third deliverable replaced by something that is actually measurable.
+
+**The CLI has no web-search configuration at all.** `grok --help` carries exactly one web-related
+flag, `--disable-web-search`. There is no result count, no depth, and no way to force a search. So
+`numResults` and `searchDepth` shape the prompt and nothing else, and both say so in their own
+descriptions rather than implying a flag behind them. They work: the same question asked at `basic`
+made 1 search over 2 pages for $0.028, and at `full` made 6 searches over 3 pages for $0.069.
+
+**`usage` has no search counter**, so the planned `server_tool_use.web_search_requests` could not be
+surfaced — there is no such field on any run, at any effort. The count exists in exactly one place:
+the `streaming-json` event stream. `websearch` therefore always runs
+`--output-format streaming-json`, whether or not the client asked for progress, and harvests queries
+and source URLs from `tool_call_update.rawOutput.action` through a new observer hook on the shared
+run core. A `json` run would be cheaper by nothing and would make the tool's central claim
+unverifiable.
+
+**The degradation case is not what the acceptance criterion assumed.** With web search disabled the
+model does not fail and does not warn — it falls through to X search, answers confidently, and cites
+`x.com`, exiting 0 with `end_turn`. The prose is indistinguishable from a real web search. So "the
+account has web search disabled" is undetectable from the answer and detectable only by counting
+what the stream did, which is what `searchPerformed` reports. X activity is reported separately and
+never as a web search, because those are different claims about where an answer came from.
+
+**Three ways the first implementation could still have claimed a search that returned nothing**, all
+found by reviewing the diff with this repo's own `review` tool and all closed:
+
+- `_meta.webSearches` counted `tool_call` events, which fire before anything comes back. A call
+  whose update never arrived read `searchPerformed: false` next to `webSearches: 1` — the same lie,
+  one field over. The two are now `webToolCalls` (started, and covering page opens: a measured run
+  made 9 calls that were 6 searches and 3 page opens) and `webSearches` (came back).
+- A completed search that returned an empty `sources` array set `searchPerformed: true`. It is now
+  `sourceCount > 0` — the caller received material from the web — and "no sources came back" is its
+  own message, distinct from "no search ran".
+- A stream cut off before `end` threw the whole harvest away, because `meta`, `formatText`, and
+  `isError` ran only on the success path. Handler meta now merges into the error and partial
+  envelopes too, with `sessionId` and `resumeCommand` stripped so no non-success path can gain a
+  session Grok never confirmed. This is M5b's rule — partial output is always returned alongside the
+  error — one layer up.
+
+**Two fixes to the shared core that `websearch` exposed rather than caused.** The streaming parser
+now follows the `--output-format` in the argv about to be spawned, instead of the client's
+`progressToken`; those two agreed for every earlier tool by coincidence, and `websearch` is the
+first caller for which they differ. And a stream that produced events but no text is now `partial`
+rather than `unparseable` — a run killed after its searches completed but before the model started
+writing was being reported as "grok returned output that is not valid JSON", moments after the
+server parsed several hundred lines of it.
+
+**Progress was blind for the part of the run a caller most wants to watch.** A backend search
+carries its title as the literal string `"Web search:"` and nothing else, so a progress log read
+`Web search:` / `Web search: — completed`. The query and the source count were already in hand on
+the update event. It now reads:
+
+```
+#5  Web search
+#6  searched "Bun JavaScript runtime latest release version" (9 sources)
+```
 
 ---
 
@@ -561,6 +621,12 @@ requires a real `end` event, so a cut-off run cannot become a finished one.
   worktree from the flag. Would need `grok worktree` orchestration first.
 - **Critique tool** (the plugin's `/grok-build:critique`) — a prompt variant of `review`. Fold in as
   a `mode: "critique"` parameter on `review` rather than a separate tool, if wanted.
+- **A source selector on `websearch`** (`web` / `x` / `both`) — the account has `x_user_search`,
+  `x_semantic_search`, `x_keyword_search`, and `x_thread_fetch` alongside the web tools, and the
+  model reaches for them unprompted. But there is no `--disable-x-search` and no way to require
+  either, so the parameter would be a request the server cannot keep — exactly the kind of knob that
+  looks like a guarantee. `websearch` reports which of the two actually ran instead, which is free
+  and true.
 
 ---
 
