@@ -13,12 +13,14 @@ import { grokTool } from './handlers/grok.js';
 import { helpTool } from './handlers/help.js';
 import { reviewTool } from './handlers/review.js';
 import { sessionsTool } from './handlers/sessions.js';
+import { statusTool } from './handlers/status.js';
 
 const TOOLS: readonly AnyToolDefinition[] = [
   checkTool,
   grokTool,
   reviewTool,
   sessionsTool,
+  statusTool,
   helpTool,
 ];
 

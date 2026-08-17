@@ -130,6 +130,18 @@ export function describeTarget(target: ReviewTarget): string {
   }
 }
 
+/**
+ * A short label from the *input*, used before the real target is resolved
+ * (a background review has not run git yet). Distinct from `describeTarget`,
+ * which names a resolved `ReviewTarget`.
+ */
+export function describeInputTarget(input: ReviewTargetInput): string {
+  if (input.uncommitted === true) return 'uncommitted';
+  if (requestedString(input.base)) return `base ${input.base}`;
+  if (requestedString(input.commit)) return `commit ${input.commit}`;
+  return 'auto target';
+}
+
 function requestedString(value: string | undefined): value is string {
   return value !== undefined && value !== '';
 }

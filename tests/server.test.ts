@@ -6,6 +6,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
@@ -76,12 +78,12 @@ describe('MCP protocol', () => {
     assert.ok(client.getServerCapabilities()?.tools);
   });
 
-  it('lists check, grok, review, sessions, and help with a description and a valid object input schema each', async () => {
+  it('lists check, grok, review, sessions, status, and help with a description and a valid object input schema each', async () => {
     const { tools } = await client.listTools();
 
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ['check', 'grok', 'review', 'sessions', 'help'],
+      ['check', 'grok', 'review', 'sessions', 'status', 'help'],
     );
 
     for (const tool of tools) {
@@ -142,6 +144,14 @@ describe('MCP protocol', () => {
     const text = content[0]?.text ?? '';
     assert.match(text, /Invalid arguments for "grok"/);
     assert.match(text, /prompt/);
+  });
+
+  it('advertises status with an object input schema and readOnlyHint true', async () => {
+    const { tools } = await client.listTools();
+    const status = tools.find((tool) => tool.name === 'status');
+    assert.ok(status);
+    assert.equal(status.inputSchema.type, 'object');
+    assert.equal(status.annotations?.readOnlyHint, true);
   });
 
   it('calls help and returns the grok --help text from the fake', async () => {
@@ -274,6 +284,26 @@ describe('configuration reaches the running server', () => {
       );
     } finally {
       await close();
+    }
+  });
+});
+
+describe('status over stdio', () => {
+  it('calls status with no arguments against an empty state dir and succeeds', async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), 'grok-mcp-status-empty-'));
+    const { client, close } = await connect({ GROK_MCP_STATE_DIR: stateDir });
+    try {
+      const result = await client.callTool({ name: 'status', arguments: {} });
+      assert.notEqual(result.isError, true);
+      const content = result.content as { text: string }[];
+      assert.match(content[0]?.text ?? '', /No background runs recorded/);
+      assert.match(
+        content[0]?.text ?? '',
+        new RegExp(stateDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      );
+    } finally {
+      await close();
+      await rm(stateDir, { recursive: true, force: true });
     }
   });
 });

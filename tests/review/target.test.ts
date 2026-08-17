@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   autoSelectTarget,
+  describeInputTarget,
   describeTarget,
   reviewTargetConflicts,
   selectReviewTarget,
@@ -247,5 +248,15 @@ describe('describeTarget', () => {
   it('fails closed on an unhandled kind so a new variant cannot silently produce an empty label', () => {
     const target = { kind: 'stash' } as unknown as ReviewTarget;
     assert.throws(() => describeTarget(target), /unhandled review target/);
+  });
+});
+
+describe('describeInputTarget', () => {
+  it('labels the input before the real target is resolved, so a background review has a short name', () => {
+    assert.equal(describeInputTarget({ uncommitted: true }), 'uncommitted');
+    assert.equal(describeInputTarget({ base: 'origin/main' }), 'base origin/main');
+    assert.equal(describeInputTarget({ commit: 'abc1234' }), 'commit abc1234');
+    assert.equal(describeInputTarget({}), 'auto target');
+    assert.equal(describeInputTarget({ uncommitted: false }), 'auto target');
   });
 });

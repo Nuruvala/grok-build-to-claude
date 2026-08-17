@@ -1,0 +1,342 @@
+import assert from 'node:assert/strict';
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+
+import { InvalidArgumentsError, JobStoreError } from '../../src/errors.js';
+import {
+  claimTerminal,
+  createLogAppender,
+  createRun,
+  finalizeRun,
+  INPUT_MAX_BYTES,
+  listRuns,
+  patchRun,
+  readRun,
+  readRunInput,
+  RECORD_MAX_BYTES,
+  runDir,
+  tailFile,
+  writeTerminal,
+} from '../../src/jobs/store.js';
+
+const tmpDirs: string[] = [];
+
+async function makeState(): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'grok-mcp-jobs-'));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+async function seed(
+  stateDir: string,
+  runId: string,
+  extra: { summary?: string; tool?: string; input?: Record<string, unknown> } = {},
+) {
+  return createRun({
+    stateDir,
+    runId,
+    tool: extra.tool ?? 'grok',
+    summary: extra.summary ?? 'do a thing',
+    cwd: '/tmp/work',
+    input: extra.input ?? { prompt: 'hi' },
+  });
+}
+
+describe('createRun / readRun', () => {
+  it('round-trips a record and leaves input.json untouched', async () => {
+    const stateDir = await makeState();
+    const input = { prompt: 'hello', maxTurns: 4 };
+    const created = await seed(stateDir, 'aaa00001-aaaaaaaa', { input });
+    const read = await readRun(stateDir, created.runId);
+    assert.ok(read);
+    assert.equal(read.runId, created.runId);
+    assert.equal(read.state, 'starting');
+    assert.equal(read.tool, 'grok');
+    assert.equal(read.cwd, '/tmp/work');
+    assert.equal(read.summary, 'do a thing');
+    assert.deepEqual(await readRunInput(stateDir, created.runId), input);
+  });
+
+  it('rejects an input larger than INPUT_MAX_BYTES at the call, before any directory is created', async () => {
+    const stateDir = await makeState();
+    const huge = { prompt: 'x'.repeat(INPUT_MAX_BYTES) };
+    await assert.rejects(
+      () =>
+        createRun({
+          stateDir,
+          runId: 'aaa00009-toolarge',
+          tool: 'grok',
+          summary: 'too big',
+          cwd: '/tmp/work',
+          input: huge,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.match(error.message, /input\.json would be \d+ bytes/);
+        assert.match(error.message, new RegExp(String(INPUT_MAX_BYTES)));
+        return true;
+      },
+    );
+    const listed = await listRuns(stateDir, 20);
+    assert.equal(listed.records.length, 0);
+    assert.equal(listed.scanned, 0);
+  });
+});
+
+describe('patchRun', () => {
+  it('returns null on a terminal record and leaves the file byte-identical', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00002-bbbbbbbb');
+    const claimed = await claimTerminal(stateDir, created.runId, 'test');
+    assert.equal(claimed.kind, 'claimed');
+    const terminal = await writeTerminal(stateDir, created.runId, {
+      state: 'completed',
+      endedAt: '2026-08-17T12:00:00.000Z',
+    });
+    assert.ok(terminal);
+    const filePath = path.join(runDir(stateDir, created.runId), 'record.json');
+    const before = await readFile(filePath);
+
+    const patched = await patchRun(stateDir, created.runId, { lastProgress: 'should not write' });
+    assert.equal(patched, null);
+    const after = await readFile(filePath);
+    assert.deepEqual(after, before);
+  });
+});
+
+describe('claimTerminal', () => {
+  it('gives exactly one claimed outcome when two calls race, both concurrently and sequentially', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00003-cccccccc');
+
+    const [first, second] = await Promise.all([
+      claimTerminal(stateDir, created.runId, 'a'),
+      claimTerminal(stateDir, created.runId, 'b'),
+    ]);
+    const kinds = [first.kind, second.kind].sort();
+    assert.deepEqual(kinds, ['claimed', 'lost']);
+
+    const sequential = await seed(stateDir, 'aaa00004-dddddddd');
+    const once = await claimTerminal(stateDir, sequential.runId, 'first');
+    const twice = await claimTerminal(stateDir, sequential.runId, 'second');
+    assert.equal(once.kind, 'claimed');
+    assert.equal(twice.kind, 'lost');
+  });
+
+  it('makes writeTerminal visible to a subsequent readRun', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00005-eeeeeeee');
+    const claim = await claimTerminal(stateDir, created.runId, 'worker');
+    assert.equal(claim.kind, 'claimed');
+    await writeTerminal(stateDir, created.runId, {
+      state: 'failed',
+      error: 'boom',
+      endedAt: '2026-08-17T12:00:00.000Z',
+    });
+    const read = await readRun(stateDir, created.runId);
+    assert.ok(read);
+    assert.equal(read.state, 'failed');
+    assert.equal(read.error, 'boom');
+  });
+});
+
+describe('finalizeRun', () => {
+  it('writes a terminal record on a successful claim', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00006-finalokx');
+    const outcome = await finalizeRun(stateDir, created.runId, 'worker', {
+      state: 'completed',
+      endedAt: '2026-08-17T12:00:00.000Z',
+    });
+    if (outcome.kind === 'lost') {
+      assert.fail('expected finalized');
+      return;
+    }
+    assert.equal(outcome.record.state, 'completed');
+    const read = await readRun(stateDir, created.runId);
+    assert.equal(read?.state, 'completed');
+  });
+
+  it('returns lost when the claim is already taken', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00007-finallost');
+    const first = await finalizeRun(stateDir, created.runId, 'worker', {
+      state: 'completed',
+      endedAt: '2026-08-17T12:00:00.000Z',
+    });
+    assert.equal(first.kind, 'finalized');
+    const second = await finalizeRun(stateDir, created.runId, 'status', {
+      state: 'abandoned',
+      endedAt: '2026-08-17T12:00:01.000Z',
+    });
+    assert.equal(second.kind, 'lost');
+    const read = await readRun(stateDir, created.runId);
+    assert.equal(read?.state, 'completed');
+  });
+
+  it('releases the claim when the terminal write cannot land, so the next claimant can recover', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'aaa00008-releasex');
+    await rm(path.join(runDir(stateDir, created.runId), 'record.json'));
+
+    await assert.rejects(() =>
+      finalizeRun(stateDir, created.runId, 'worker', {
+        state: 'failed',
+        endedAt: '2026-08-17T12:00:00.000Z',
+        error: 'gone',
+      }),
+    );
+
+    const claim = await claimTerminal(stateDir, created.runId, 'retry');
+    assert.equal(claim.kind, 'claimed');
+  });
+});
+
+describe('listRuns', () => {
+  it('counts a non-json record and one over RECORD_MAX_BYTES as unreadable without failing', async () => {
+    const stateDir = await makeState();
+    await seed(stateDir, 'bbb00001-goodgood');
+    await seed(stateDir, 'bbb00002-notjsonx');
+    await writeFile(path.join(runDir(stateDir, 'bbb00002-notjsonx'), 'record.json'), 'not json');
+    await seed(stateDir, 'bbb00003-toolarge');
+    await writeFile(
+      path.join(runDir(stateDir, 'bbb00003-toolarge'), 'record.json'),
+      `${'x'.repeat(RECORD_MAX_BYTES + 8)}\n`,
+    );
+
+    const listed = await listRuns(stateDir, 20);
+    assert.equal(listed.records.length, 1);
+    assert.equal(listed.records[0]?.runId, 'bbb00001-goodgood');
+    assert.equal(listed.unreadable, 2);
+  });
+
+  it('returns newest first by id ordering alone, honours limit, and sets truncated past a lowered scan cap', async () => {
+    const stateDir = await makeState();
+    await seed(stateDir, 'ccc00001-oldestxx');
+    await seed(stateDir, 'ccc00002-middlexx');
+    await seed(stateDir, 'ccc00003-newestxx');
+    await seed(stateDir, 'ccc00004-newerxxx');
+
+    const limited = await listRuns(stateDir, 2);
+    assert.deepEqual(
+      limited.records.map((row) => row.runId),
+      ['ccc00004-newerxxx', 'ccc00003-newestxx'],
+    );
+
+    const capped = await listRuns(stateDir, 20, { scanCap: 2 });
+    assert.equal(capped.truncated, true);
+    assert.equal(capped.scanned, 2);
+    assert.equal(capped.records.length, 2);
+    assert.deepEqual(
+      capped.records.map((row) => row.runId),
+      ['ccc00004-newerxxx', 'ccc00003-newestxx'],
+    );
+  });
+
+  it('returns an empty list without throwing when the runs root does not exist', async () => {
+    const listed = await listRuns(path.join(os.tmpdir(), 'grok-mcp-no-such-state-7c3e91a2'), 20);
+    assert.deepEqual(listed.records, []);
+    assert.equal(listed.scanned, 0);
+    assert.equal(listed.truncated, false);
+  });
+
+  it(
+    'throws JobStoreError when the runs root is unreadable',
+    { skip: process.getuid?.() === 0 },
+    async () => {
+      const stateDir = await makeState();
+      const root = path.join(stateDir, 'runs');
+      await seed(stateDir, 'ddd00001-blockedx');
+      await chmod(root, 0o000);
+      try {
+        await assert.rejects(
+          () => listRuns(stateDir, 20),
+          (error: unknown) => {
+            assert.ok(error instanceof JobStoreError);
+            assert.match(error.remedy ?? '', /GROK_MCP_STATE_DIR/);
+            return true;
+          },
+        );
+      } finally {
+        await chmod(root, 0o700);
+      }
+    },
+  );
+});
+
+describe('atomic writes', () => {
+  it('leaves no *.tmp file after a successful write', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'eee00001-atomictx');
+    await patchRun(stateDir, created.runId, { lastProgress: 'step' });
+    const names = await readdir(runDir(stateDir, created.runId));
+    assert.equal(
+      names.some((name) => name.endsWith('.tmp')),
+      false,
+      `tmp file survived: ${names.join(', ')}`,
+    );
+  });
+});
+
+describe('createLogAppender', () => {
+  it('preserves order under a burst of 500 writes and stops at maxBytes with the marker present exactly once', async () => {
+    const stateDir = await makeState();
+    const filePath = path.join(stateDir, 'burst.log');
+    const maxBytes = 200;
+    const appender = createLogAppender(filePath, maxBytes);
+    for (let i = 0; i < 500; i += 1) {
+      appender.write(`${String(i).padStart(3, '0')}\n`);
+    }
+    await appender.close();
+
+    const text = await readFile(filePath, 'utf8');
+    const marker = `[log truncated at ${maxBytes} bytes by grok-build-mcp-server]`;
+    const markerHits = text.split(marker).length - 1;
+    assert.equal(markerHits, 1);
+    assert.ok(text.includes(marker));
+
+    const lines = text
+      .split('\n')
+      .filter((line) => line !== '' && !line.startsWith('[log truncated'));
+    for (let i = 1; i < lines.length; i += 1) {
+      const prev = lines[i - 1];
+      const curr = lines[i];
+      assert.ok(prev !== undefined && curr !== undefined);
+      assert.ok(prev < curr, `out of order: ${prev} then ${curr}`);
+    }
+    assert.ok(Buffer.byteLength(text) <= maxBytes + Buffer.byteLength(`${marker}\n`));
+  });
+});
+
+describe('tailFile', () => {
+  it('reads only the end of a file larger than the tail and sets truncated', async () => {
+    const stateDir = await makeState();
+    const filePath = path.join(stateDir, 'tail.log');
+    await writeFile(filePath, 'line-one\nline-two\nline-three\n');
+    const tailed = await tailFile(filePath, 14);
+    assert.equal(tailed.truncated, true);
+    assert.ok(!tailed.text.startsWith('line-one'));
+    assert.match(tailed.text, /line-three\n$/);
+    assert.doesNotMatch(tailed.text, /^[^\n]*[^\n]$/s);
+
+    const whole = await tailFile(filePath, 100);
+    assert.equal(whole.text, 'line-one\nline-two\nline-three\n');
+    assert.equal(whole.truncated, false);
+  });
+
+  it('drops a mid-line prefix after a truncated read so a chopped UTF-8 sequence is not shown', async () => {
+    const stateDir = await makeState();
+    const filePath = path.join(stateDir, 'mid.log');
+    await writeFile(filePath, 'AAAAAAAA\ncomplete-line\n');
+    const tailed = await tailFile(filePath, 18);
+    assert.equal(tailed.truncated, true);
+    assert.equal(tailed.text.startsWith('A'), false);
+    assert.match(tailed.text, /complete-line\n$/);
+  });
+});

@@ -12,6 +12,7 @@ import { InvalidArgumentsError } from '../../errors.js';
 import { buildGrokArgs } from '../../grok/args.js';
 import { withPromptDelivery } from '../../grok/prompt-file.js';
 import type { GrokRunResult } from '../../grok/result.js';
+import { startBackgroundRun } from '../../jobs/spawn.js';
 import { permissionFlags } from '../../permission.js';
 import { truncateDiff } from '../../review/diff.js';
 import type { TruncatedDiff } from '../../review/diff.js';
@@ -22,6 +23,7 @@ import { buildReviewPrompt } from '../../review/prompt.js';
 import { REVIEW_FINDINGS_SCHEMA } from '../../review/schema.js';
 import {
   autoSelectTarget,
+  describeInputTarget,
   describeTarget,
   reviewTargetConflicts,
   selectReviewTarget,
@@ -108,6 +110,13 @@ const ReviewInput = z
       .min(1)
       .optional()
       .describe('Maximum agentic turns. Passed as `--max-turns`. Headless only.'),
+    background: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run detached and return a runId immediately instead of waiting. Poll with the `status` tool. ' +
+          'The run survives a restart of this MCP server. `false` is not a request.',
+      ),
   })
   .describe('Code review of a git target.')
   .meta({ title: 'ReviewInput' });
@@ -135,6 +144,18 @@ export const reviewTool = defineTool({
     const conflicts = reviewTargetConflicts(input);
     if (conflicts.length > 0) {
       throw new InvalidArgumentsError('review', conflicts);
+    }
+
+    if (input.background === true) {
+      return startBackgroundRun(
+        {
+          tool: 'review',
+          input: { ...input },
+          summary: `review ${describeInputTarget(input)}`,
+          cwd: input.cwd ?? process.cwd(),
+        },
+        ctx,
+      );
     }
 
     const repoDir = input.cwd ?? process.cwd();

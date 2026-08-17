@@ -436,6 +436,21 @@ describe('grok error paths preserve buffered output', () => {
 });
 
 describe('grok permission ceiling', () => {
+  it('rejects an over-ceiling background request synchronously, so a doomed run never gets a runId', async () => {
+    const { binary, argvFile } = await installFake();
+    await assert.rejects(
+      () =>
+        grokTool.handler({ prompt: 'hi', permission: 'full', background: true }, ctxFor(binary)),
+      (error: unknown) => {
+        assert.ok(error instanceof PermissionDeniedError);
+        assert.match(error.message, /full/);
+        assert.match(error.remedy ?? '', /GROK_MCP_PERMISSION_CEILING/);
+        return true;
+      },
+    );
+    assert.equal(await argvExists(argvFile), false);
+  });
+
   it('rejects an over-ceiling request with a message naming GROK_MCP_PERMISSION_CEILING, and does not spawn', async () => {
     const { binary, argvFile } = await installFake({ FAKE_GROK_STDOUT: SUCCESS_JSON });
 

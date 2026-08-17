@@ -14,6 +14,7 @@ export type ErrorKind =
   | 'grok-failed'
   | 'git-failed'
   | 'sessions-store'
+  | 'job-store'
   | 'timeout'
   | 'internal';
 
@@ -143,6 +144,27 @@ export class SessionsStoreError extends GrokMcpError {
       ...(options.cause === undefined ? {} : { cause: options.cause }),
     });
     this.name = 'SessionsStoreError';
+  }
+}
+
+/**
+ * The background-run store root could not be read. ENOENT is not this error —
+ * that is "no runs yet". Anything else (EACCES, ENOTDIR) is, and the remedy
+ * names GROK_MCP_STATE_DIR so the caller can fix the path rather than retry.
+ */
+export class JobStoreError extends GrokMcpError {
+  constructor(stateDir: string, options: { cause?: unknown; code?: string | undefined } = {}) {
+    const details: Record<string, unknown> = { stateDir };
+    if (options.code !== undefined) details['code'] = options.code;
+
+    super('job-store', `Could not read the background run store at ${stateDir}.`, {
+      remedy:
+        `Check that ${stateDir} is a readable directory, or set GROK_MCP_STATE_DIR to a writable ` +
+        'path for background job records.',
+      details,
+      ...(options.cause === undefined ? {} : { cause: options.cause }),
+    });
+    this.name = 'JobStoreError';
   }
 }
 

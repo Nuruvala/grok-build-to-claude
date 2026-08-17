@@ -14,6 +14,8 @@ import { InvalidArgumentsError } from '../../errors.js';
 import { buildGrokArgs } from '../../grok/args.js';
 import type { SessionSelector } from '../../grok/args.js';
 import { withPromptDelivery } from '../../grok/prompt-file.js';
+import { summarize } from '../../jobs/record.js';
+import { startBackgroundRun } from '../../jobs/spawn.js';
 import { requestedPermissionLevel, resolvePermission } from '../../permission.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
@@ -123,6 +125,13 @@ const GrokInput = z
       .boolean()
       .optional()
       .describe('Pass `--disable-web-search`. `false` is not a request.'),
+    background: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run detached and return a runId immediately instead of waiting. Poll with the `status` tool. ' +
+          'The run survives a restart of this MCP server. `false` is not a request.',
+      ),
   })
   .describe('Headless Grok Build run.')
   .meta({ title: 'GrokInput' });
@@ -161,6 +170,18 @@ export const grokTool = defineTool({
       defaultLevel: ctx.config.defaultPermission,
       ceiling: ctx.config.permissionCeiling,
     });
+
+    if (input.background === true) {
+      return startBackgroundRun(
+        {
+          tool: 'grok',
+          input: { ...input },
+          summary: summarize(input.prompt),
+          cwd: input.cwd ?? process.cwd(),
+        },
+        ctx,
+      );
+    }
 
     const model = input.model ?? ctx.config.defaultModel;
     const effort = input.effort ?? ctx.config.defaultEffort;
