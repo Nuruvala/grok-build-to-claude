@@ -446,7 +446,9 @@ server process while the worker is still patching progress, and no drain on the 
 see it coming. A generation counter checked at write time, or moving progress out of `record.json`
 entirely, is the M5b design problem.
 
-### M5b — `stop`
+### M5b — `stop` ✅
+
+Shipped 2026-08-17. `stop` terminates a background run's process tree and records the outcome.
 
 **Deliverables**
 
@@ -460,6 +462,54 @@ entirely, is the M5b design problem.
 
 - Restarting the MCP server mid-run leaves `stop` still able to kill.
 - Concurrent `stop` and natural completion resolve to exactly one terminal state.
+
+**Delivered.** Both criteria pass. Verified live against grok 1.0.4: a real background run stopped
+at 20 seconds and 127 progress events, `SIGTERM` to the process group, worker and `grok` child both
+gone, record `cancelled`, and the result the run had already produced preserved.
+
+**One signal reaps the tree.** The worker is a process-group leader and spawns `grok` with
+`detached: false`, so `kill(-workerPid)` covers both. SIGTERM first, so a well-behaved worker closes
+its log appenders and lets `execGrok` reap its child; SIGKILL only after a bounded grace.
+
+**The cross-process race is closed by removing the second writer, not by arbitrating between two.**
+Progress moved to `progress.json`, the worker pid to `worker.pid`, a result that lost the claim to
+`late-result.json`. Each has exactly one writer, and `record.json` is now touched by three events:
+creation, the worker's transition to `running`, and the terminal write. A generation counter was the
+alternative and was rejected — a CAS on a filesystem is a read-check-rename with a window of its
+own, and it would leave two writers contending for one file, which is the arrangement that produced
+every lost-record bug in M5a.
+
+**`stop` must never report a stopped run while the tree is alive.** The first implementation could
+do it four ways, all found by review and reproduced before being fixed:
+
+- **No pid yet.** The worker recorded its own pid, so a `stop` during boot had nothing to signal,
+  wrote `cancelled`, and left `grok` running. The server now persists the pid to `worker.pid` before
+  it returns a `runId`, so no caller can name a run whose pid is not findable. The tempting fix —
+  having the server patch `workerPid` onto `record.json` — is the two-writer defect M5a removed, and
+  was rejected for that reason.
+- **Liveness polled the leader while the signal went to the group.** A worker that exited with
+  `grok` still running read as "the tree exited". Both now use `kill(-pid, 0)`, which raises `ESRCH`
+  only when the group is empty.
+- **A `cancelled` record next to a live process.** Only `gone`, `terminated`, and `killed` write a
+  terminal state. `no-pid`, `not-permitted`, and `survived` release the claim, leave the record
+  non-terminal, and return `isError: true`. A run that still reads `running` is honest and
+  retryable; the tidy lie is neither.
+- **The worker outliving its own record.** `patchRun` now refuses a present claim as well as a
+  terminal record, and the worker exits when its `running` patch is refused rather than spending a
+  run into a record nobody will keep.
+
+**A stopped run gets its session back.** `grok` reports `sessionId` only on the `end` event, so a
+SIGTERM'd run never carries one — `stop` used to promise a resumable session and then omit it. The
+session is on disk from the moment the run starts, so it is read from the CLI's own store, which is
+the opposite of the plugin inventing a UUID. Exactly one match inside the run's time window is
+reported with `sessionIdSource: 'store'`; several are reported as candidates rather than resolved,
+because resuming the wrong session continues somebody else's work. Measured on a real stopped run:
+`created_at` landed 0.283s after the run's `startedAt`, and the recovered id resumed cleanly.
+
+**Also fixed here:** a parsed result now wins over an abort or a timeout as well as over a non-zero
+exit. Without it, a worker whose `grok` child had already written `end` lost the session id and the
+spend that produced it — exactly the loss `late-result.json` exists to prevent. A result still
+requires a real `end` event, so a cut-off run cannot become a finished one.
 
 ---
 

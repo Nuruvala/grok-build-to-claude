@@ -11,10 +11,10 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: early.** M5a is complete: the server runs real headless Grok agents in the foreground or
-> detached in the background, streams progress while they run, reviews git diffs, lists the sessions
-> those runs created, and reports session, usage, and cost. The `stop` and `websearch` tools are on
-> the way — see [ROADMAP.md](ROADMAP.md).
+> **Status: early.** M5 is complete: the server runs real headless Grok agents in the foreground or
+> detached in the background, streams progress while they run, stops a run on request, reviews git
+> diffs, lists the sessions those runs created, and reports session, usage, and cost. The
+> `websearch` tool is on the way — see [ROADMAP.md](ROADMAP.md).
 
 ## Progress
 
@@ -108,11 +108,12 @@ child process untouched.
 | `grok`     | by ceiling | Run a headless Grok agent. Prompt, session resume/continue/fork, model, effort, tool allow/deny |
 | `review`   | always     | Review a git diff: working tree, a merge-base diff against a ref, or a single commit            |
 | `status`   | always     | Poll a background run, or list recent ones                                                      |
+| `stop`     | no         | Terminate a background run's process tree                                                       |
 | `sessions` | always     | List, search, and look up the Grok sessions on this machine                                     |
 | `check`    | yes        | Server version, resolved binary, `grok version`, auth, permission ceiling, run defaults         |
 | `help`     | yes        | `grok --help` passthrough                                                                       |
 
-`stop` and `websearch` are still on the roadmap.
+`websearch` is still on the roadmap.
 
 ### `review`
 
@@ -157,7 +158,7 @@ A review that reaches for a shell is refused, not killed. In headless mode an un
 request cancels the entire run while the CLI still exits 0, so `review` denies the shell and edit
 tools outright — the model is told no and finishes its review instead of dying mid-sentence.
 
-### Background runs and `status`
+### Background runs, `status`, and `stop`
 
 A long agent run does not have to occupy your client. Pass `background: true` to `grok` or `review`
 and the call returns a `runId` immediately, while a detached worker process runs the job to
@@ -167,6 +168,7 @@ completion:
 > have grok refactor the parser in the background
 > status
 > status the run from a minute ago and wait 30s for it
+> stop that run
 ```
 
 The run belongs to the machine, not to this server: it keeps going if your MCP client disconnects,
@@ -191,8 +193,30 @@ Validation still happens before you get a `runId`: a request above `GROK_MCP_PER
 a contradictory pair of session flags, is rejected as a failed call rather than accepted and then
 failed in a process nobody is watching.
 
-There is no `stop` tool yet — a background run ends when it finishes or when it hits
-`GROK_MCP_TIMEOUT_MS`.
+`stop` ends a run early. It signals the worker's whole process group — the worker and the `grok`
+process it spawned — with SIGTERM, then SIGKILL if that is not enough. Stopping an already-finished
+run is not an error, and neither is stopping one that finished a moment before your call landed.
+
+**A stop that could not kill the process tree is reported as a failure, not as a stopped run.** If
+there is nothing to signal, or the kill is refused, or the tree survives SIGKILL, the run is left
+reading `running` and the call returns an error naming the pid. A `cancelled` record sitting next to
+a live process would be the tidier answer and the useless one.
+
+A run you stop mid-flight has usually already produced something worth keeping, and both the partial
+result and the session id are preserved:
+
+```
+Stopped run msxji60o-8f5e27c4 (grok, ran 20s).
+Signalled SIGTERM to process group 1703005; the tree exited.
+
+The run was cancelled mid-flight, but it recorded a session before it ended:
+  grok -r 01a010e2-478c-73d2-bce9-23552245c64d
+```
+
+Grok only reports a session id when a run reaches its end, which a stopped one never does — so that
+id is read back from the CLI's own session store rather than reconstructed. `_meta.sessionIdSource`
+tells you which you have. If two runs in the same directory could both match, you get the candidate
+ids and no resume command: resuming the wrong session continues somebody else's work.
 
 ### `sessions`
 

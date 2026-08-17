@@ -257,6 +257,18 @@ tool on 2026-08-17:
   `Session <id> found locally (originally in /tmp/a)`. So `grok -r <id>` is honest advice with no
   `--cwd`, and a record's cwd is where the session _started_, not everywhere it has run.
 
+- **A killed run still leaves a resumable session**, and the store is the only place to find it.
+  Measured on 2026-08-17 by SIGTERMing a real headless run at 20 seconds: `summary.json` existed
+  with `created_at` **0.283s after the run started**, and the id resumed cleanly afterwards —
+  `grok -r <id>` returned the same `sessionId` and `end_turn`. No `end` event ever carried that id,
+  because the run never reached one. So a run that dies mid-flight has a session worth reporting,
+  and reading it back from `~/.grok/sessions` is the only way to report it without inventing one.
+
+  The lower bound of a search window can be exact — the session is always created after the run
+  starts — but `created_at` is stamped at session creation, not at flush, so it can never fall after
+  the moment the process was killed. The real failure is `summary.json` not being readable yet for a
+  run killed in its first moments; that degrades to finding nothing, which is the honest answer.
+
 ### An unapprovable tool request kills the run
 
 The single most expensive headless behaviour found so far, verified on 1.0.4 on 2026-08-17. When the
@@ -537,13 +549,21 @@ child process untouched.
 
 ## Current state
 
-M1–M5a are complete: `check`, `help`, `grok`, `review`, `sessions`, and `status` all ship, with
-progress streaming, structured review findings, session listing backed by the CLI's own on-disk
-store, and background runs that survive a restart of this server. `stop` (M5b) and `websearch`
-remain. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
+M1–M5 are complete: `check`, `help`, `grok`, `review`, `sessions`, `status`, and `stop` all ship,
+with progress streaming, structured review findings, session listing backed by the CLI's own on-disk
+store, and background runs that survive a restart of this server. `websearch` (M6) remains. Licensed
+MIT. See [ROADMAP.md](ROADMAP.md) for milestones and acceptance criteria.
 
-The background-run design has one constraint a future change must respect: `record.json` is
-read-modify-written, so it may only ever have one writer at a time. `finalizeRun` and the worker's
-drain-before-finalize order are what make that true today, and M5b has to extend it across processes
-— `stop` finalizes from the server while the worker is still patching progress, and no drain on the
-worker's side can anticipate that.
+Two constraints in the background-run design that a future change must respect:
+
+- **`record.json` is read-modify-written, so it may only ever have one writer at a time.** M5b made
+  that structural rather than conventional: progress, the worker pid, and a result that lost the
+  terminal claim each live in their own single-writer sidecar, and `record.json` is touched only at
+  creation, at the worker's transition to `running`, and at the terminal write. Anything that adds a
+  second writer to it reopens the whole class — a generation counter does not help, because a CAS on
+  a filesystem is a read-check-rename with a window of its own.
+- **No path may report a run as stopped while its process tree is alive.** `stop` claims the
+  terminal transition, then signals, then writes — in that order — and only `gone`, `terminated`,
+  and `killed` may write `cancelled`. Every other outcome releases the claim and leaves the record
+  non-terminal. A `cancelled` record next to a live process is the failure mode this tool exists to
+  avoid, not an acceptable approximation of one.
