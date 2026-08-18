@@ -1,0 +1,93 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nuruvala/grok-build-mcp-server",
+  "title": "Grok Build",
+  "description": "Run the Grok Build CLI as MCP tools: agent runs with live progress, code review, web research.",
+  "version": "0.2.0",
+  "websiteUrl": "https://github.com/Nuruvala/grok-build-to-claude#readme",
+  "repository": {
+    "url": "https://github.com/Nuruvala/grok-build-to-claude",
+    "source": "github",
+    "id": "1335841987"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "grok-build-mcp-server",
+      "version": "0.2.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GROK_BINARY",
+          "description": "Path to the grok executable. Only needed when grok is not on PATH.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        },
+        {
+          "name": "GROK_MCP_PERMISSION_CEILING",
+          "description": "Highest permission level any call may request. Granted once at registration and never prompts again.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "read-only",
+          "choices": ["read-only", "write", "full"]
+        },
+        {
+          "name": "GROK_MCP_DEFAULT_PERMISSION",
+          "description": "Permission level used when a call specifies none. Must be at or below the ceiling.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "read-only",
+          "choices": ["read-only", "write", "full"]
+        },
+        {
+          "name": "GROK_MCP_DEFAULT_MODEL",
+          "description": "Model used when a call omits one.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "grok-4.6"
+        },
+        {
+          "name": "GROK_MCP_DEFAULT_EFFORT",
+          "description": "Reasoning effort used when a call omits one.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "high"
+        },
+        {
+          "name": "GROK_MCP_TIMEOUT_MS",
+          "description": "Wall-clock kill for a single run, in milliseconds.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "1800000",
+          "format": "number"
+        },
+        {
+          "name": "GROK_MCP_STATE_DIR",
+          "description": "Directory for background job records. Defaults to $XDG_STATE_HOME/grok-mcp.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        },
+        {
+          "name": "GROK_MCP_MAX_CONCURRENT_RUNS",
+          "description": "Background runs alive at once. Use off, none, or unlimited for no cap.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "4"
+        },
+        {
+          "name": "STRUCTURED_CONTENT_ENABLED",
+          "description": "Emit structuredContent alongside _meta. Off by default because some clients mishandle it.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean"
+        }
+      ]
+    }
+  ]
+}

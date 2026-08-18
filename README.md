@@ -1,6 +1,7 @@
 # grok-build-mcp-server
 
 [![npm](https://img.shields.io/npm/v/grok-build-mcp-server?style=flat-square)](https://www.npmjs.com/package/grok-build-mcp-server)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.nuruvala%2Fgrok--build--mcp--server-6E56CF?style=flat-square)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.nuruvala/grok-build-mcp-server)
 [![CI](https://img.shields.io/github/actions/workflow/status/Nuruvala/grok-build-to-claude/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Nuruvala/grok-build-to-claude/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/node/v/grok-build-mcp-server?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -88,6 +89,10 @@ The server speaks MCP over stdio and takes no arguments of its own:
 
 VS Code and Cursor accept the install badges at the top of this page, which carry exactly that
 configuration.
+
+Clients that install from the [MCP Registry](https://registry.modelcontextprotocol.io) know this
+server as `io.github.nuruvala/grok-build-mcp-server`. The registry entry is published from the same
+tag as the npm release and points at the same package.
 
 ### If `npx` cannot find the server
 

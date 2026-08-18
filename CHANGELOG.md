@@ -10,6 +10,20 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+### Added
+
+- An [MCP Registry](https://registry.modelcontextprotocol.io) entry. `server.json` declares the
+  server as `io.github.nuruvala/grok-build-mcp-server`, and the release workflow publishes it after
+  npm on every `vX.Y.Z` tag. Ownership is verified by the `mcpName` field now in `package.json`,
+  which the registry reads out of the published tarball — so the entry can only name a version whose
+  tarball carries it.
+
+### Changed
+
+- The release workflow now refuses a tag unless the tag, `package.json`, and `server.json` all agree
+  on the version, the npm identifier, and the registry name. `tests/server-json.test.ts` checks the
+  same invariants on every run, so the drift surfaces locally rather than at publish time.
+
 ## [0.2.0] — 2026-08-18
 
 Two changes reject calls that 0.1.0 accepted: tool input schemas are strict, and `cwd` must be an

@@ -80,7 +80,11 @@ jobs:
       - name: Coverage floors
         run: npm run test:coverage
 
-      - name: Tag matches package version
+      # Four things have to agree, and three of them fail late and unhelpfully if they
+      # do not. A stale server.json version publishes a registry entry pointing at an
+      # npm version that is not the one being released; a mismatched mcpName fails
+      # ownership verification with an error that names neither file.
+      - name: Tag, package.json, and server.json agree
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -90,6 +94,21 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"
             exit 1
           fi
+          node --input-type=module --eval '
+            import { readFileSync } from "node:fs";
+            const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+            const srv = JSON.parse(readFileSync("server.json", "utf8"));
+            const fail = (m) => { console.log(`::error::${m}`); process.exitCode = 1; };
+            if (srv.version !== pkg.version)
+              fail(`server.json version ${srv.version} does not match package.json ${pkg.version}`);
+            const npmPkg = srv.packages?.find((p) => p.registryType === "npm");
+            if (npmPkg?.version !== pkg.version)
+              fail(`server.json npm package version ${npmPkg?.version} does not match package.json ${pkg.version}`);
+            if (npmPkg?.identifier !== pkg.name)
+              fail(`server.json npm identifier ${npmPkg?.identifier} does not match package.json name ${pkg.name}`);
+            if (pkg.mcpName !== srv.name)
+              fail(`package.json mcpName ${pkg.mcpName} does not match server.json name ${srv.name} — the registry reads this to verify npm ownership`);
+          '
 
       # `npx -y grok-build-mcp-server` is the documented install, so prove the packed
       # tarball actually starts before it is published rather than after. The path is
@@ -113,9 +132,40 @@ jobs:
       - name: Publish
         run: npm publish "$TARBALL" --access public
 
+  mcp-registry:
+    name: Publish to MCP Registry
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      # `mcp-publisher login github-oidc` exchanges this for a token scoped to the
+      # io.github.nuruvala/* namespace. No stored credential, same as the npm publish.
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # This job runs after `publish` because ownership verification is a fetch: the
+      # registry reads `mcpName` out of the package.json that is already on npm. Run it
+      # first and it verifies the previous release, or fails outright on a first publish.
+      #
+      # A failure here does not roll back npm. Recover with "Re-run failed jobs", which
+      # re-runs only this job — a full re-run would die at `npm publish` on a version
+      # that already exists.
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --help > /dev/null
+
+      - name: Authenticate
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish
+
   github-release:
     name: GitHub release
-    needs: publish
+    needs: [publish, mcp-registry]
     runs-on: ubuntu-latest
     permissions:
       contents: write
