@@ -10,6 +10,13 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.0] — 2026-08-18
+
+Two changes reject calls that 0.1.0 accepted: tool input schemas are strict, and `cwd` must be an
+absolute path. Both fail with `invalid-arguments` naming the offending key, and both replace a
+silent misbehaviour — a typo'd key ran at the wrong permission level and reported success, a
+relative `cwd` ran against whatever directory the MCP client happened to launch this server from.
+
 ### Security
 
 - `runId` is validated as a path segment before it is joined onto the state directory. `status` and

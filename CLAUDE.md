@@ -619,9 +619,11 @@ server — and so does the release: [docs/api-reference.md](docs/api-reference.m
 npm publish workflow with provenance. Licensed MIT. See [ROADMAP.md](ROADMAP.md) for milestones and
 acceptance criteria.
 
-What is left is the release itself, and it is not something this repo can do on its own: an
-`NPM_TOKEN` repository secret, an `npm login` for the first publish, making the GitHub repo public,
-and pushing a `v0.1.0` tag. The workflow refuses to publish if the tag and `package.json` disagree.
+The package is on npm. A release is cut by pushing a `vX.Y.Z` tag; the workflow refuses to publish
+if the tag and `package.json` disagree. Authentication is npm trusted publishing (OIDC) — no
+`NPM_TOKEN` anywhere, and npm attaches provenance without being asked. The one credential-shaped
+failure left is a trusted-publisher configuration that does not match this repository and the
+workflow _filename_; npm validates it only at publish time and the symptom is `ENEEDAUTH`.
 
 Four constraints a future change must respect. The first two are the background-run design; the
 third is what `websearch` added; the fourth is what M7 found:
