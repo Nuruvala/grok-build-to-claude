@@ -10,7 +10,20 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
-Nothing yet.
+### Changed
+
+- Releases publish over [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC)
+  instead of a stored `NPM_TOKEN`. Nothing holds a publish credential any more, and npm generates
+  the provenance attestation without being asked. 0.1.0 was published with a token because a trusted
+  publisher can only be attached to a package that already exists.
+
+### Fixed
+
+- `help` no longer tells a timed-out caller to set `GROK_MCP_TIMEOUT_MS`. The help timeout is a
+  `Math.min` against 15 seconds, so raising that variable cannot move the deadline.
+- V8 coverage is kept out of the processes the test suite deliberately kills. A killed child left a
+  truncated coverage fragment, which failed the whole run on the coverage step with every test
+  passing.
 
 ## [0.1.0] — 2026-08-18
 

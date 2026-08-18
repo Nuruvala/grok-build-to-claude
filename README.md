@@ -344,13 +344,20 @@ Bump `version` in `package.json`, move the `Unreleased` section of [CHANGELOG.md
 under the new version heading, commit, then:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
 ```
 
 [.github/workflows/release.yml](.github/workflows/release.yml) runs the full gate, refuses to
-publish if the tag and `package.json` disagree, proves the packed tarball starts and answers
-`initialize`, then publishes to npm with provenance and cuts a GitHub release. It needs an
-`NPM_TOKEN` repository secret.
+publish if the tag and `package.json` disagree, installs the packed tarball into a scratch directory
+and drives a real `initialize` against the installed binary, then publishes **that same file** and
+cuts a GitHub release.
+
+There is no publish credential to manage. Authentication is
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers): the workflow exchanges a
+short-lived OIDC token, and npm generates the provenance attestation on its own. The trust is
+registered against this repository and this workflow's **filename**, so renaming `release.yml`
+breaks publishing — and npm does not check the configuration until a publish is attempted, where the
+symptom is `ENEEDAUTH` rather than anything that names the cause.
 
 ## License
 

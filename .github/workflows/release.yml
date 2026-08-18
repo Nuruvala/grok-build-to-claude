@@ -5,12 +5,16 @@ name: Release
 # disagree, because a tag that does not match what gets published makes every later
 # `git checkout v0.1.0` a lie.
 #
-# Authentication is a classic `NPM_TOKEN` secret. npm trusted publishing (OIDC) is
-# the better option and needs no stored credential, but it has to be configured on
-# a package that already exists, so it is not available for the first release. Once
-# `grok-build-mcp-server` is on the registry, configure it there and drop both the
-# secret and the `NODE_AUTH_TOKEN` line; `--provenance` and `id-token: write` stay
-# either way.
+# Authentication is npm trusted publishing (OIDC): no stored credential, no
+# `NPM_TOKEN` secret. Each run exchanges a short-lived token scoped to this repository
+# and this workflow *filename*, which is registered at
+# npmjs.com -> grok-build-mcp-server -> Settings -> Trusted publishing. Renaming this
+# file breaks publishing, and npm does not validate the configuration until a publish
+# is attempted — the symptom is ENEEDAUTH, not a helpful message.
+#
+# 0.1.0 was published with a token because a trusted publisher can only be attached to
+# a package that already exists. That token has served its purpose; nothing here reads
+# one any more.
 
 # A pushed tag is the only trigger. There is deliberately no `workflow_dispatch`: a manual run
 # from a branch would publish whatever version happens to be in package.json, with no tag to
@@ -41,9 +45,19 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
+          # The engines floor, so the release is built by the oldest Node we claim
+          # to support rather than by whatever is newest.
           node-version: '22'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
+
+      # Node 22 ships npm 10.x; OIDC publishing needs 11.5.1 or later. Pinning the
+      # range here turns a missing feature into an install error rather than an
+      # ENEEDAUTH at the last step.
+      - name: Use an npm that can publish over OIDC
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
 
       - run: npm ci
 
@@ -93,10 +107,11 @@ jobs:
           echo "$output"
           printf '%s' "$output" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const m=JSON.parse(s.trim().split("\n")[0]);if(m.result?.serverInfo?.name!=="grok-build")throw new Error("unexpected initialize result: "+s);})'
 
+      # No token: the `id-token: write` permission above is the whole credential.
+      # Provenance is generated automatically for a trusted publish from a public
+      # repository, so `--provenance` is not passed — npm does it without asking.
       - name: Publish
-        run: npm publish "$TARBALL" --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$TARBALL" --access public
 
   github-release:
     name: GitHub release
