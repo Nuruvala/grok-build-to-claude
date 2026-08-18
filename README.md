@@ -122,15 +122,21 @@ call. Three levels:
 | Level                 | `--permission-mode` | `--sandbox` | What it allows                     |
 | --------------------- | ------------------- | ----------- | ---------------------------------- |
 | `read-only` (default) | `plan`              | `read-only` | Reading and reasoning. No edits    |
-| `write`               | `acceptEdits`       | `workspace` | Edits inside the working directory |
+| `write`               | `auto`              | `workspace` | Edits inside the working directory |
 | `full`                | `bypassPermissions` | `off`       | Unattended full approval           |
 
-The sandbox is not advisory. Under `write` the run **cannot write outside `cwd`**, and a refused
-tool call ends the whole run: the CLI reports `stopReason: cancelled`, exits 0, and returns only
-whatever the model had said before the refusal. The server names the refused call and its path in
-that case, so a sandbox refusal is not mistaken for a model that gave up. If a run must write
-somewhere else, say a report outside the repository, either point it at a path inside `cwd` or use
-`full`.
+The sandbox is not advisory, and a refusal is not a warning. Under `write` the run **cannot write
+outside `cwd`**, and a refused tool call ends the **whole run**: the CLI reports
+`stopReason: cancelled`, exits 0, and returns only whatever the model had said before the refusal.
+The server names the refused call and its path in that case, so a sandbox refusal is not mistaken
+for a model that gave up. If a run must write somewhere else, say a report outside the repository,
+either point it at a path inside `cwd` or use `full`.
+
+`write` uses `--permission-mode auto` rather than `acceptEdits`, which is measured rather than
+inherited from the flag's name. Headless grok has no human to accept an edit, so under
+`acceptEdits`, `dontAsk` and `default` every file mutation is refused and the run dies, on both
+sandbox profiles. `auto` and `bypassPermissions` both work; `auto` is the narrower one, and it still
+refuses a write outside the workspace, so `full` remains a real step up rather than a synonym.
 
 To let Grok make edits:
 

@@ -3,7 +3,7 @@
   "name": "io.github.Nuruvala/grok-build-mcp-server",
   "title": "Grok Build",
   "description": "Run the Grok Build CLI as MCP tools: agent runs with live progress, code review, web research.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "websiteUrl": "https://github.com/Nuruvala/grok-build-to-claude#readme",
   "repository": {
     "url": "https://github.com/Nuruvala/grok-build-to-claude",
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "grok-build-mcp-server",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

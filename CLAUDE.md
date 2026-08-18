@@ -442,7 +442,7 @@ This account's web and X tool ids, from a run asked to enumerate its own tools: 
    | Level       | `--permission-mode`                          | `--sandbox` |
    | ----------- | -------------------------------------------- | ----------- |
    | `read-only` | `plan`                                       | `read-only` |
-   | `write`     | `acceptEdits`                                | `workspace` |
+   | `write`     | `auto`                                       | `workspace` |
    | `full`      | `bypassPermissions` (via `--always-approve`) | `off`       |
 
    `GROK_MCP_PERMISSION_CEILING` caps what any call may request; `GROK_MCP_DEFAULT_PERMISSION` sets

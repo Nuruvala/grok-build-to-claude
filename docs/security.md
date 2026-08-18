@@ -12,7 +12,7 @@ levels:
 | Level                 | `--permission-mode`                          | `--sandbox` | What it allows                     |
 | --------------------- | -------------------------------------------- | ----------- | ---------------------------------- |
 | `read-only` (default) | `plan`                                       | `read-only` | Reading and reasoning. No edits    |
-| `write`               | `acceptEdits`                                | `workspace` | Edits inside the working directory |
+| `write`               | `auto`                                       | `workspace` | Edits inside the working directory |
 | `full`                | `bypassPermissions` (via `--always-approve`) | `off`       | Unattended full approval           |
 
 Two environment variables control it:
@@ -49,9 +49,16 @@ install stays here.
 
 ### `write`
 
-`--permission-mode acceptEdits` with `--sandbox workspace`. The spawned `grok` can edit files inside
-the working directory you point it at. Writes outside that directory are scoped by the CLI's
-workspace sandbox.
+`--permission-mode auto` with `--sandbox workspace`. The spawned `grok` can edit files inside the
+working directory you point it at. Writes outside that directory are refused by the CLI's workspace
+sandbox, and a refused tool call ends the whole run rather than being skipped, so a `write` run that
+tries to escape produces no partial escape.
+
+The mode is `auto` and not `acceptEdits` for a measured reason. Headless grok has nobody to accept
+an edit, and under `acceptEdits`, `dontAsk` or `default` every file mutation is refused on both
+sandbox profiles. Of the two modes that do perform edits, `auto` is the narrower, and it was checked
+to still refuse a write outside the workspace before it was chosen: the containment on this level is
+the sandbox, not the permission mode.
 
 Register it only if you want delegated Grok runs to change the tree:
 

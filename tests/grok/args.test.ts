@@ -97,7 +97,7 @@ describe('buildGrokArgs flag emission', () => {
     assertAdjacent(
       buildGrokArgs(minimal({ permission: permissionFlags('write') })),
       '--permission-mode',
-      'acceptEdits',
+      'auto',
     );
   });
 
@@ -311,7 +311,7 @@ describe('buildGrokArgs permission levels', () => {
     { permissionMode: string; sandbox: string; alwaysApprove: boolean }
   > = {
     'read-only': { permissionMode: 'plan', sandbox: 'read-only', alwaysApprove: false },
-    write: { permissionMode: 'acceptEdits', sandbox: 'workspace', alwaysApprove: false },
+    write: { permissionMode: 'auto', sandbox: 'workspace', alwaysApprove: false },
     full: { permissionMode: 'bypassPermissions', sandbox: 'off', alwaysApprove: true },
   };
 

@@ -86,7 +86,7 @@ describe('permissionFlags', () => {
     { permissionMode: string; sandbox: string; alwaysApprove: boolean }
   > = {
     'read-only': { permissionMode: 'plan', sandbox: 'read-only', alwaysApprove: false },
-    write: { permissionMode: 'acceptEdits', sandbox: 'workspace', alwaysApprove: false },
+    write: { permissionMode: 'auto', sandbox: 'workspace', alwaysApprove: false },
     full: { permissionMode: 'bypassPermissions', sandbox: 'off', alwaysApprove: true },
   };
 

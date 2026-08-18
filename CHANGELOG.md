@@ -10,6 +10,29 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.4] — 2026-08-18
+
+The `write` permission level could not write. Found immediately after 0.2.3, by the diagnostic 0.2.3
+added: the note naming the refused tool call is what made a second refusal legible enough to chase,
+and chasing it showed the sandbox was never the cause.
+
+### Fixed
+
+- `write` maps to `--permission-mode auto` instead of `acceptEdits`. Measured against headless grok
+  1.0.4, with one prompt, one existing file and one working directory: `acceptEdits`, `dontAsk` and
+  `default` all leave the file untouched and end the run with `stopReason: "cancelled"`, on
+  `--sandbox workspace` and on `--sandbox off` alike, while `auto` and `bypassPermissions` both
+  perform the edit. A mode that waits for a human to accept cannot work in `-p`, where there is no
+  human to ask. `auto` is chosen as the narrower of the two that work, so `full` stays a real step
+  up.
+- Containment is unchanged and was checked rather than assumed. Under `auto` with
+  `--sandbox workspace`, an edit inside the working directory succeeds and a write outside it is
+  still refused. What confines a `write` run is the sandbox; the permission mode only ever decided
+  whether an edit needs a human.
+
+The flag vocabulary in this table was verified against grok 1.0.0 when it was written, and the
+vocabulary was right. **A flag whose name states its behaviour still has to be run.**
+
 ## [0.2.3] — 2026-08-18
 
 Found by dogfooding. A `write` to a path outside `cwd` under `permission: "write"` is refused by the
