@@ -25,6 +25,11 @@ export function isOrphan(record: RunRecord, nowMs: number): boolean {
   return nowMs - created > STARTUP_GRACE_MS;
 }
 
+/** Live = not terminal and not an orphan. Both judgements already live here. */
+export function countLiveRuns(records: readonly RunRecord[], nowMs: number): number {
+  return records.filter((record) => !isTerminal(record.state) && !isOrphan(record, nowMs)).length;
+}
+
 /** Derive an `abandoned` view of an orphan. Does not persist. */
 export function displayRecord(record: RunRecord, nowMs: number, orphanError: string): RunRecord {
   if (!isOrphan(record, nowMs)) return record;

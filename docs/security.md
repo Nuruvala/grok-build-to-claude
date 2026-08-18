@@ -110,7 +110,7 @@ Plan mode alone looks equivalent to a deny rule and is not.
 The model reads content you did not write: a diff under review, files in the working directory, web
 pages and X posts during a `websearch`. That content can try to steer the agent.
 
-Three consequences, all already true in the code:
+Four consequences, all already true in the code:
 
 - `review` and `websearch` are pinned read-only and take no `permission`, `write`, or `yolo`
   argument, so no amount of steering turns them into a writer.
@@ -120,9 +120,24 @@ Three consequences, all already true in the code:
   directory. It is accepted only in the shape `newRunId` issues (`<base36 ms>-<8 hex>`), so a value
   containing `..` is `invalid-arguments` and never joined onto the store root. A miss is a
   well-formed id the store does not have; a traversal is not a miss.
+- `cwd` is caller-supplied. A relative path would resolve against the server's own working directory
+  — whatever the MCP client launched it from — which the caller neither controls nor can predict. A
+  silent resolve would run against the wrong tree and still report success. A supplied `cwd` must be
+  an absolute path to an existing directory; a relative path, a missing path, or a file is
+  `invalid-arguments` before spawn.
 
 This server does not filter, scan, or redact prompts, and it does not inspect what the model decided
 to do.
+
+## Concurrent-run cap
+
+`GROK_MCP_MAX_CONCURRENT_RUNS` (default 4) is a spend and resource guard, not a security boundary.
+It refuses a new `background: true` call when the number of non-terminal, non-orphan records is
+already at the cap. The read is several awaits long, so two calls arriving in the same tick can both
+pass it. That is best-effort by construction: treating the cap as an invariant would require a
+second writer on the run store, which this server does not have. `off` / `none` / `unlimited`
+disable it. An unreadable store is not treated as "at cap" — failing closed there would turn a
+broken state directory into a total outage of background mode.
 
 ## Command construction
 
@@ -167,8 +182,11 @@ Four places, none of them encrypted:
 - A prompt over 64 KiB is delivered by file rather than argv, and this server writes that file: a
   `mkdtemp` directory under the system temp directory (`grok-mcp-prompt-*`, mode `0700`) holding
   `prompt.txt` at `0600`. It is deleted when the run ends, on both the success and failure paths.
-  This is how a large `review` diff actually reaches the CLI. The retention sweep does not touch it,
-  because it is gone before the sweep would look.
+  This is how a large `review` diff actually reaches the CLI. A SIGKILL of this process skips that
+  `finally`, so a sweep at server start and after each background worker also removes directories
+  matching `grok-mcp-prompt-*` under the OS temp directory once they are older than
+  `max(24h, 2 × GROK_MCP_TIMEOUT_MS)`. The sweep never touches a name that does not match that
+  prefix, and never looks outside the OS temp directory.
 - `$GROK_HOME/sessions` (default `~/.grok/sessions`): the CLI's own store, containing the full chat
   history of every run. Not ours to manage — this server reads it and never writes it, and the
   retention sweep does not touch it.

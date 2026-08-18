@@ -20,6 +20,7 @@ export const DEFAULTS = {
   timeoutMs: 30 * 60 * 1000,
   permissionCeiling: 'read-only',
   defaultPermission: 'read-only',
+  maxConcurrentRuns: 4,
 } as const;
 
 export interface Config {
@@ -44,6 +45,10 @@ export interface Config {
   readonly sessionsDir: string;
   /** Some clients mishandle `structuredContent`, so it is opt-in. */
   readonly structuredContentEnabled: boolean;
+  /**
+   * Ceiling on background runs alive at once. `null` means no cap.
+   */
+  readonly maxConcurrentRuns: number | null;
 }
 
 export type Env = Readonly<Partial<Record<string, string>>>;
@@ -80,6 +85,32 @@ function parsePositiveInt(env: Env, key: string, fallback: number, problems: str
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     problems.push(`${key} must be a positive integer number of milliseconds (got "${value}").`);
+    return fallback;
+  }
+  return parsed;
+}
+
+/**
+ * Own parser, not a generalisation of `parsePositiveInt` or `parseOptOutString`:
+ * those accept different spellings, and a shared function would blur the error.
+ */
+function parseMaxConcurrentRuns(
+  env: Env,
+  key: string,
+  fallback: number,
+  problems: string[],
+): number | null {
+  const value = trimmed(env, key);
+  if (value === undefined) return fallback;
+
+  const lowered = value.toLowerCase();
+  if (lowered === 'off' || lowered === 'none' || lowered === 'unlimited') return null;
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    problems.push(
+      `${key} must be a positive integer, or one of off, none, unlimited (got "${value}").`,
+    );
     return fallback;
   }
   return parsed;
@@ -167,6 +198,12 @@ export function loadConfig(env: Env = process.env): Config {
     stateDir: defaultStateDir(env),
     sessionsDir: defaultSessionsDir(env),
     structuredContentEnabled: parseBoolean(env, 'STRUCTURED_CONTENT_ENABLED'),
+    maxConcurrentRuns: parseMaxConcurrentRuns(
+      env,
+      'GROK_MCP_MAX_CONCURRENT_RUNS',
+      DEFAULTS.maxConcurrentRuns,
+      problems,
+    ),
   };
 
   if (problems.length > 0) {

@@ -26,12 +26,14 @@ import {
   autoSelectTarget,
   describeInputTarget,
   describeTarget,
+  isSafeGitRef,
   reviewTargetConflicts,
   selectReviewTarget,
 } from '../../review/target.js';
 import type { ReviewTarget } from '../../review/target.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
+import { assertUsableCwd, isUsableCwdShape } from '../cwd.js';
 import { runGrok } from '../run.js';
 import type { GrokRunMeta } from '../run.js';
 
@@ -64,12 +66,16 @@ const ReviewInput = z
       .string()
       .min(1)
       .max(ARGV_PATH_MAX)
+      .refine(isUsableCwdShape, { message: 'An absolute path is required.' })
       .optional()
-      .describe('Repository to review. Defaults to the current working directory.'),
+      .describe('Absolute path. Repository to review. Defaults to the current working directory.'),
     base: z
       .string()
       .min(1)
       .max(ARGV_TOKEN_MAX)
+      .refine(isSafeGitRef, {
+        message: 'A ref may not start with "-" because git would read it as an option.',
+      })
       .optional()
       .describe(
         'Review the merge-base diff against this ref. Mutually exclusive with commit and uncommitted.',
@@ -78,6 +84,9 @@ const ReviewInput = z
       .string()
       .min(1)
       .max(ARGV_TOKEN_MAX)
+      .refine(isSafeGitRef, {
+        message: 'A ref may not start with "-" because git would read it as an option.',
+      })
       .optional()
       .describe('Review this commit. Mutually exclusive with base and uncommitted.'),
     uncommitted: z
@@ -147,6 +156,8 @@ export const reviewTool = defineTool({
     openWorldHint: true,
   },
   handler: async (input: ReviewInput, ctx: ToolContext): Promise<ToolResult> => {
+    await assertUsableCwd(input.cwd, 'review');
+
     const conflicts = reviewTargetConflicts(input);
     if (conflicts.length > 0) {
       throw new InvalidArgumentsError('review', conflicts);

@@ -275,6 +275,18 @@ describe('review schema validation', () => {
       );
     });
   }
+
+  it('rejects base: "--output=/tmp/x" at the schema, because git would read it as an option', async () => {
+    await assert.rejects(
+      () =>
+        invokeTool('review', { base: '--output=/tmp/x' }, ctxFor('/no/such-grok-binary-7c3e91a2')),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.match(error.message, /may not start with "-"/);
+        return true;
+      },
+    );
+  });
 });
 
 describe('review explicit targets embed the matching diff', { skip: skipGit }, () => {

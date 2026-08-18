@@ -11,8 +11,8 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 
-import { GitError } from '../errors.js';
-import type { RepoFacts, ReviewTarget } from './target.js';
+import { GitError, InvalidArgumentsError } from '../errors.js';
+import { isSafeGitRef, type RepoFacts, type ReviewTarget } from './target.js';
 
 /** Well-known SHA-1 of the empty tree. Fallback when `hash-object` cannot produce one. */
 const EMPTY_TREE_SHA1 = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -168,7 +168,16 @@ async function collectUncommitted(cwd: string): Promise<DiffCollection> {
   });
 }
 
-async function collectBase(cwd: string, ref: string): Promise<DiffCollection> {
+export async function collectBase(cwd: string, ref: string): Promise<DiffCollection> {
+  // Schema is the caller-facing check; this is the backstop so a future entry
+  // point cannot reintroduce an option-shaped ref. InvalidArgumentsError, not
+  // GitError — git did not fail, we refused to ask it.
+  if (!isSafeGitRef(ref)) {
+    throw new InvalidArgumentsError('review', [
+      `base "${ref}" may not start with "-" because git would read it as an option.`,
+    ]);
+  }
+
   // Merge-base, not `git diff <ref>..HEAD`. Two-dot against the ref includes
   // commits that landed on the base after we branched — those are not ours.
   const merge = await runGit(cwd, ['merge-base', ref, 'HEAD']);
@@ -197,7 +206,13 @@ async function collectBase(cwd: string, ref: string): Promise<DiffCollection> {
   });
 }
 
-async function collectCommit(cwd: string, sha: string): Promise<DiffCollection> {
+export async function collectCommit(cwd: string, sha: string): Promise<DiffCollection> {
+  if (!isSafeGitRef(sha)) {
+    throw new InvalidArgumentsError('review', [
+      `commit "${sha}" may not start with "-" because git would read it as an option.`,
+    ]);
+  }
+
   const resolved = await runGit(cwd, ['rev-parse', '--verify', sha]);
   if (resolved.code !== 0) {
     throw new GitError(`Commit "${sha}" was not found.`, {

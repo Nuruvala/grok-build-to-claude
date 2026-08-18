@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { GitError } from '../../src/errors.js';
-import { collectDiff, collectRepoFacts } from '../../src/review/git.js';
+import { GitError, InvalidArgumentsError } from '../../src/errors.js';
+import { collectBase, collectCommit, collectDiff, collectRepoFacts } from '../../src/review/git.js';
 
 interface GitRun {
   readonly code: number;
@@ -34,6 +34,32 @@ const gitOnPath = gitAvailable as () => boolean;
 const skip = gitOnPath()
   ? false
   : 'git is not on PATH; the review collector tests need a real git binary';
+
+describe('option-shaped git ref backstop', () => {
+  it('collectBase refuses a dash-prefixed ref as invalid-arguments without asking git', async () => {
+    await assert.rejects(
+      () => collectBase('/tmp', '--output=/tmp/x'),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.equal(error.kind, 'invalid-arguments');
+        assert.match(error.message, /may not start with "-"/);
+        return true;
+      },
+    );
+  });
+
+  it('collectCommit refuses a dash-prefixed sha as invalid-arguments without asking git', async () => {
+    await assert.rejects(
+      () => collectCommit('/tmp', '--output=/tmp/x'),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.equal(error.kind, 'invalid-arguments');
+        assert.match(error.message, /may not start with "-"/);
+        return true;
+      },
+    );
+  });
+});
 
 describe('collectRepoFacts repo shapes', { skip }, () => {
   it('reports an empty repo with no commits as having no HEAD, no upstream, and a clean tree', async () => {

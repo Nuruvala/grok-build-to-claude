@@ -10,11 +10,20 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { InvalidArgumentsError, toErrorText } from '../errors.js';
+import { InvalidArgumentsError, TooManyRunsError, toErrorText } from '../errors.js';
 import { log } from '../log.js';
 import type { ToolContext, ToolResult } from '../types.js';
+import { countLiveRuns } from './liveness.js';
 import { newRunId } from './record.js';
-import { createRun, finalizeRun, RUN_FILE_MODE, runDir, writeWorkerPid } from './store.js';
+import {
+  createRun,
+  finalizeRun,
+  LIST_SCAN_CAP,
+  listRuns,
+  RUN_FILE_MODE,
+  runDir,
+  writeWorkerPid,
+} from './store.js';
 
 /** Pure: which interpreter arguments and runner path to use, given the module's own filename. */
 export function resolveRunnerLaunch(moduleFileName: string): {
@@ -40,10 +49,43 @@ export interface StartBackgroundRunOptions {
   readonly cwd: string;
 }
 
+/**
+ * Live background runs, or `null` when the store could not be read.
+ *
+ * An unreadable store is not evidence of runs in flight, so it reads as "no
+ * opinion" rather than "at cap" — failing closed here would turn a broken
+ * state directory into a total outage of background mode.
+ */
+async function countLiveRunsOrNull(stateDir: string): Promise<number | null> {
+  try {
+    // The second argument is the *return* limit. LIST_SCAN_CAP is also the
+    // default scan cap, so the same bound covers what is read and what comes
+    // back, and the count cannot be silently truncated below the scan.
+    const listed = await listRuns(stateDir, LIST_SCAN_CAP);
+    return countLiveRuns(listed.records, Date.now());
+  } catch (error: unknown) {
+    log.debug('failed to count live background runs; proceeding without the cap', error);
+    return null;
+  }
+}
+
 export async function startBackgroundRun(
   options: StartBackgroundRunOptions,
   ctx: ToolContext,
 ): Promise<ToolResult> {
+  // Budget guard, not a mutex. The read is several awaits long, so two calls
+  // arriving in the same tick can both pass it. It bounds runaway fan-out; it
+  // is not an invariant, and no other code may rely on it as one. A lock file
+  // or shared counter would add a second writer to the run store, which
+  // CLAUDE.md forbids.
+  const cap = ctx.config.maxConcurrentRuns;
+  if (cap !== null) {
+    const live = await countLiveRunsOrNull(ctx.config.stateDir);
+    if (live !== null && live >= cap) {
+      throw new TooManyRunsError(live, cap);
+    }
+  }
+
   const runId = newRunId(Date.now());
   const input = withoutBackground(options.input);
   const createdAt = new Date().toISOString();
@@ -165,6 +207,8 @@ function workerEnv(ctx: ToolContext): NodeJS.ProcessEnv {
     GROK_MCP_DEFAULT_PERMISSION: config.defaultPermission,
     GROK_MCP_DEFAULT_MODEL: config.defaultModel ?? 'none',
     GROK_MCP_DEFAULT_EFFORT: config.defaultEffort ?? 'none',
+    GROK_MCP_MAX_CONCURRENT_RUNS:
+      config.maxConcurrentRuns === null ? 'unlimited' : String(config.maxConcurrentRuns),
     STRUCTURED_CONTENT_ENABLED: config.structuredContentEnabled ? '1' : '0',
   };
 }

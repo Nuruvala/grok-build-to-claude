@@ -594,16 +594,17 @@ is the short list of the constraints that bind most often.
 
 ## Environment variables
 
-| Variable                      | Purpose                                                                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| `GROK_BINARY`                 | Override the `grok` executable path                                                         |
-| `GROK_MCP_DEFAULT_MODEL`      | Default model when a call omits one (default `grok-4.6`)                                    |
-| `GROK_MCP_DEFAULT_EFFORT`     | Default reasoning effort when a call omits one (default `high`)                             |
-| `GROK_MCP_TIMEOUT_MS`         | Wall-clock kill for a single run (default 1800000)                                          |
-| `GROK_MCP_PERMISSION_CEILING` | Highest level any call may request: `read-only` (default), `write`, `full`                  |
-| `GROK_MCP_DEFAULT_PERMISSION` | Level used when a call specifies none. Must be at or below the ceiling. Default `read-only` |
-| `GROK_MCP_STATE_DIR`          | Background job records (default `$XDG_STATE_HOME/grok-mcp` or `$TMPDIR/grok-mcp`)           |
-| `STRUCTURED_CONTENT_ENABLED`  | Emit `structuredContent` alongside `_meta`                                                  |
+| Variable                       | Purpose                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------- |
+| `GROK_BINARY`                  | Override the `grok` executable path                                                         |
+| `GROK_MCP_DEFAULT_MODEL`       | Default model when a call omits one (default `grok-4.6`)                                    |
+| `GROK_MCP_DEFAULT_EFFORT`      | Default reasoning effort when a call omits one (default `high`)                             |
+| `GROK_MCP_TIMEOUT_MS`          | Wall-clock kill for a single run (default 1800000)                                          |
+| `GROK_MCP_PERMISSION_CEILING`  | Highest level any call may request: `read-only` (default), `write`, `full`                  |
+| `GROK_MCP_DEFAULT_PERMISSION`  | Level used when a call specifies none. Must be at or below the ceiling. Default `read-only` |
+| `GROK_MCP_STATE_DIR`           | Background job records (default `$XDG_STATE_HOME/grok-mcp` or `$TMPDIR/grok-mcp`)           |
+| `GROK_MCP_MAX_CONCURRENT_RUNS` | Background runs alive at once (default 4). `off`/`none`/`unlimited` for no cap              |
+| `STRUCTURED_CONTENT_ENABLED`   | Emit `structuredContent` alongside `_meta`                                                  |
 
 Grok's own variables (`XAI_API_KEY`, `GROK_HOME`, `GROK_DISABLE_AUTOUPDATER`) pass through to the
 child process untouched.

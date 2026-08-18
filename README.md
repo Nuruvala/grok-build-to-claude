@@ -89,6 +89,18 @@ The server speaks MCP over stdio and takes no arguments of its own:
 VS Code and Cursor accept the install badges at the top of this page, which carry exactly that
 configuration.
 
+### If `npx` cannot find the server
+
+`npx` resolves a bare package name against the _local_ project first. If your MCP client's working
+directory is a checkout of this repository — or of anything else whose `package.json` is named
+`grok-build-mcp-server` — `npx -y grok-build-mcp-server` runs the local entry point, does not find
+one, and fails with `command not found`. Install it somewhere of its own and register that path:
+
+```bash
+npm install --prefix ~/.local/share/grok-build-mcp grok-build-mcp-server
+claude mcp add grok-build -- ~/.local/share/grok-build-mcp/node_modules/.bin/grok-build-mcp-server
+```
+
 ## Permissions
 
 Grok runs launched through this server are **read-only by default**: `--permission-mode plan` with
@@ -120,17 +132,18 @@ would report success while changing nothing, which is worse than a clear error.
 
 ## Environment variables
 
-| Variable                      | Default                    | Purpose                                                          |
-| ----------------------------- | -------------------------- | ---------------------------------------------------------------- |
-| `GROK_BINARY`                 | `grok`                     | Path to the `grok` executable                                    |
-| `GROK_MCP_PERMISSION_CEILING` | `read-only`                | Highest level any call may request                               |
-| `GROK_MCP_DEFAULT_PERMISSION` | `read-only`                | Level used when a call requests none                             |
-| `GROK_MCP_DEFAULT_MODEL`      | `grok-4.6`                 | Model when a call omits one. `none` defers to the CLI            |
-| `GROK_MCP_DEFAULT_EFFORT`     | `high`                     | Reasoning effort when a call omits one. `none` defers to the CLI |
-| `GROK_MCP_TIMEOUT_MS`         | `1800000`                  | Wall clock for a single run                                      |
-| `GROK_MCP_STATE_DIR`          | `$XDG_STATE_HOME/grok-mcp` | Background job records                                           |
-| `GROK_MCP_LOG_LEVEL`          | `info`                     | `debug`, `info`, `warn`, `error`. Logs go to stderr              |
-| `STRUCTURED_CONTENT_ENABLED`  | off                        | Also emit `structuredContent` alongside `_meta`                  |
+| Variable                       | Default                    | Purpose                                                          |
+| ------------------------------ | -------------------------- | ---------------------------------------------------------------- |
+| `GROK_BINARY`                  | `grok`                     | Path to the `grok` executable                                    |
+| `GROK_MCP_PERMISSION_CEILING`  | `read-only`                | Highest level any call may request                               |
+| `GROK_MCP_DEFAULT_PERMISSION`  | `read-only`                | Level used when a call requests none                             |
+| `GROK_MCP_DEFAULT_MODEL`       | `grok-4.6`                 | Model when a call omits one. `none` defers to the CLI            |
+| `GROK_MCP_DEFAULT_EFFORT`      | `high`                     | Reasoning effort when a call omits one. `none` defers to the CLI |
+| `GROK_MCP_TIMEOUT_MS`          | `1800000`                  | Wall clock for a single run                                      |
+| `GROK_MCP_STATE_DIR`           | `$XDG_STATE_HOME/grok-mcp` | Background job records                                           |
+| `GROK_MCP_MAX_CONCURRENT_RUNS` | `4`                        | Background runs alive at once. `off` for no cap                  |
+| `GROK_MCP_LOG_LEVEL`           | `info`                     | `debug`, `info`, `warn`, `error`. Logs go to stderr              |
+| `STRUCTURED_CONTENT_ENABLED`   | off                        | Also emit `structuredContent` alongside `_meta`                  |
 
 Grok's own variables (`XAI_API_KEY`, `GROK_HOME`, `GROK_DISABLE_AUTOUPDATER`) pass through to the
 child process untouched.

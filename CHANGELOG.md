@@ -18,8 +18,29 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
   `runId` containing `..`, so a call could read a `record.json` — or, via `status` `tail`, a
   `worker.log` — from any directory on the machine and return it to the model.
 
+### Added
+
+- `GROK_MCP_MAX_CONCURRENT_RUNS` (default `4`) bounds how many background runs may be alive at once.
+  A `background: true` call arriving at the cap fails with the new `too-many-runs` error kind, which
+  names the live count and points at `status` and `stop`. `off`, `none`, and `unlimited` disable it.
+  The cap is a spend and resource guard rather than a mutex: the count is a multi-step read, so two
+  calls in the same tick can both pass it, and an unreadable store proceeds rather than failing
+  closed.
+- Prompt directories left behind by a killed run are swept. A prompt over 64 KiB is written to a
+  `mkdtemp` directory whose cleanup lives in a `finally`, which SIGKILL does not run. The server now
+  removes `grok-mcp-prompt-*` directories older than `max(24h, 2 × GROK_MCP_TIMEOUT_MS)` at startup
+  and after each background worker, never touching a name outside that prefix or a directory outside
+  the OS temp directory.
+
 ### Changed
 
+- `cwd` must be an absolute path to an existing directory on `grok`, `review`, and `websearch`. A
+  relative path used to resolve against the server's own working directory — whatever the MCP client
+  launched it from, which the caller neither controls nor can predict — and a nonexistent path or a
+  file reached `spawn` unchecked. All three are now `invalid-arguments` before anything is spawned.
+- `review`'s `base` and `commit` reject a ref starting with `-`. Nothing escaped before, because
+  `git merge-base` and `git rev-parse --verify` refuse option-shaped arguments, but the property is
+  now stated by this server rather than borrowed from git's parser.
 - Releases publish over [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC)
   instead of a stored `NPM_TOKEN`. Nothing holds a publish credential any more, and npm generates
   the provenance attestation without being asked. 0.1.0 was published with a token because a trusted
@@ -32,6 +53,10 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ### Fixed
 
+- Caller-fault rejections no longer print a stack trace to stderr. An invalid argument, an unknown
+  tool, a permission request above the ceiling, and a refused background start are all routine and
+  correctable by changing the call; their stacks named absolute paths and told an operator nothing.
+  Every other error keeps its stack, which is the case where one helps.
 - A spawn that fails with `E2BIG` now names the flag whose value was longest and what the platform
   actually limits — Linux caps a single argument at 128 KiB (`MAX_ARG_STRLEN`), macOS counts every
   argument and the environment against one `ARG_MAX` — instead of telling the caller to install a

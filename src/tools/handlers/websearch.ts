@@ -22,6 +22,7 @@ import type { ToolContext, ToolResult } from '../../types.js';
 import { createSearchActivityCollector, type SearchActivity } from '../../websearch/citations.js';
 import { buildWebSearchPrompt } from '../../websearch/prompt.js';
 import type { SearchDepth } from '../../websearch/prompt.js';
+import { assertUsableCwd, isUsableCwdShape } from '../cwd.js';
 import { runGrok } from '../run.js';
 import type { GrokRunMeta } from '../run.js';
 
@@ -69,9 +70,10 @@ const WebSearchInput = z
       .string()
       .min(1)
       .max(ARGV_PATH_MAX)
+      .refine(isUsableCwdShape, { message: 'An absolute path is required.' })
       .optional()
       .describe(
-        'Working directory for the run. Passed as `--cwd`. Defaults to the current working directory.',
+        'Absolute path. Working directory for the run. Passed as `--cwd`. Defaults to the current working directory.',
       ),
     model: z
       .string()
@@ -128,6 +130,8 @@ export const websearchTool = defineTool({
     openWorldHint: true,
   },
   handler: async (input: WebSearchInput, ctx: ToolContext): Promise<ToolResult> => {
+    await assertUsableCwd(input.cwd, 'websearch');
+
     if (input.background === true) {
       return startBackgroundRun(
         {

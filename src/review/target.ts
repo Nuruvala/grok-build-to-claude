@@ -115,6 +115,11 @@ export function autoSelectTarget(facts: RepoFacts): AutoSelection {
   });
 }
 
+/** Pure. False for a ref git would read as an option. */
+export function isSafeGitRef(value: string): boolean {
+  return !value.startsWith('-');
+}
+
 export function describeTarget(target: ReviewTarget): string {
   switch (target.kind) {
     case 'uncommitted':

@@ -5,6 +5,7 @@ import {
   autoSelectTarget,
   describeInputTarget,
   describeTarget,
+  isSafeGitRef,
   reviewTargetConflicts,
   selectReviewTarget,
 } from '../../src/review/target.js';
@@ -259,4 +260,23 @@ describe('describeInputTarget', () => {
     assert.equal(describeInputTarget({}), 'auto target');
     assert.equal(describeInputTarget({ uncommitted: false }), 'auto target');
   });
+});
+
+describe('isSafeGitRef', () => {
+  const cases: readonly { readonly value: string; readonly expected: boolean }[] = [
+    { value: 'main', expected: true },
+    { value: 'origin/main', expected: true },
+    { value: 'abc1234', expected: true },
+    { value: 'refs/heads/feature', expected: true },
+    { value: '--output=/tmp/x', expected: false },
+    { value: '-b', expected: false },
+    { value: '-', expected: false },
+    { value: 'feature-branch', expected: true },
+  ];
+
+  for (const { value, expected } of cases) {
+    it(`${JSON.stringify(value)} → ${expected}`, () => {
+      assert.equal(isSafeGitRef(value), expected);
+    });
+  }
 });

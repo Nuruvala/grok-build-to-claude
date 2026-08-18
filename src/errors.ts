@@ -10,6 +10,7 @@ export type ErrorKind =
   | 'invalid-arguments'
   | 'unknown-tool'
   | 'permission-denied'
+  | 'too-many-runs'
   | 'binary-not-found'
   | 'grok-failed'
   | 'git-failed'
@@ -68,6 +69,28 @@ export class InvalidArgumentsError extends GrokMcpError {
       { details: { tool, issues } },
     );
     this.name = 'InvalidArgumentsError';
+  }
+}
+
+/**
+ * A background start was refused because too many runs are already live.
+ *
+ * The count is a budget guard, not a mutex: two calls in the same tick can
+ * both pass it. The message still names the numbers the caller saw.
+ */
+export class TooManyRunsError extends GrokMcpError {
+  constructor(live: number, cap: number) {
+    super(
+      'too-many-runs',
+      `Cannot start another background run: ${live} already live, cap is ${cap}.`,
+      {
+        remedy:
+          'Poll existing runs with the status tool and end one with stop, ' +
+          'or raise the cap by setting GROK_MCP_MAX_CONCURRENT_RUNS.',
+        details: { live, cap },
+      },
+    );
+    this.name = 'TooManyRunsError';
   }
 }
 
@@ -203,4 +226,16 @@ export function toErrorText(error: unknown): string {
 
 export function errorKind(error: unknown): ErrorKind {
   return error instanceof GrokMcpError ? error.kind : 'internal';
+}
+
+const CALLER_FAULT_KINDS: ReadonlySet<ErrorKind> = new Set([
+  'invalid-arguments',
+  'unknown-tool',
+  'permission-denied',
+  'too-many-runs',
+]);
+
+/** True for errors the caller caused and can fix by changing the call. */
+export function isCallerFault(kind: ErrorKind): boolean {
+  return CALLER_FAULT_KINDS.has(kind);
 }

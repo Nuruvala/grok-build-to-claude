@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -312,6 +313,45 @@ describe('configuration reaches the running server', () => {
       );
     } finally {
       await close();
+    }
+  });
+});
+
+describe('caller-fault errors do not print a stack', () => {
+  it('logs an invalid-argument rejection as one line of message, not stack frames', async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['--import', 'tsx', ENTRY],
+      cwd: REPO_ROOT,
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        HOME: process.env['HOME'] ?? '',
+        GROK_MCP_LOG_LEVEL: 'warn',
+        GROK_BINARY: FAKE_GROK,
+        FAKE_GROK_STDOUT: 'grok 1.0.0 (fake) [test]\n\nAvailable models:\n  * grok-4.6 (default)\n',
+        GROK_MCP_TIMEOUT_MS: '5000',
+      },
+      stderr: 'pipe',
+    });
+
+    const chunks: Buffer[] = [];
+    transport.stderr?.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+
+    const client = new Client({ name: 'grok-build-mcp-tests', version: '0.0.0' });
+    await client.connect(transport);
+    try {
+      const result = await client.callTool({ name: 'grok', arguments: {} });
+      assert.equal(result.isError, true);
+      const stderr = Buffer.concat(chunks).toString('utf8');
+      assert.match(stderr, /Invalid arguments for "grok"/);
+      // The entry runs under tsx, so a rendered stack frame points at a .ts
+      // file. Matching only .js here would pass whether or not one was printed.
+      assert.doesNotMatch(stderr, /\.[jt]s:\d/);
+      assert.doesNotMatch(stderr, /\bat /);
+    } finally {
+      await client.close();
     }
   });
 });

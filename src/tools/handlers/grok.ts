@@ -26,6 +26,7 @@ import {
 import { requestedPermissionLevel, resolvePermission } from '../../permission.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
+import { assertUsableCwd, isUsableCwdShape } from '../cwd.js';
 import { runGrok } from '../run.js';
 
 const PermissionLevelSchema = z.enum(['read-only', 'write', 'full']);
@@ -45,8 +46,11 @@ const GrokInput = z
       .string()
       .min(1)
       .max(ARGV_PATH_MAX)
+      .refine(isUsableCwdShape, { message: 'An absolute path is required.' })
       .optional()
-      .describe('Working directory for the run. Passed as `--cwd`. Use the narrowest useful path.'),
+      .describe(
+        'Absolute path. Working directory for the run. Passed as `--cwd`. Use the narrowest useful path.',
+      ),
     model: z
       .string()
       .max(ARGV_TOKEN_MAX)
@@ -181,6 +185,8 @@ export const grokTool = defineTool({
     openWorldHint: true,
   },
   handler: async (input: GrokInput, ctx: ToolContext): Promise<ToolResult> => {
+    await assertUsableCwd(input.cwd, 'grok');
+
     const conflicts = sessionConflicts(input);
     if (conflicts.length > 0) {
       throw new InvalidArgumentsError('grok', conflicts);

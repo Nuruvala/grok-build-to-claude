@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import type { Config } from '../config.js';
 import { toErrorText } from '../errors.js';
+import { promptDirMaxAgeMs, sweepStalePromptDirs } from '../grok/prompt-file.js';
 import { log } from '../log.js';
 import { invokeTool } from '../tools/registry.js';
 import type { ProgressUpdate, RunSink, ToolContext, ToolResult } from '../types.js';
@@ -61,6 +62,13 @@ export async function runJob(options: RunJobOptions): Promise<RunState> {
       await sweepRetainedRuns({ stateDir: options.stateDir });
     } catch (error: unknown) {
       log.debug('retention sweep failed', error);
+    }
+    // Awaited, not fire-and-forget: this process exits when runJob returns, so
+    // a dangling sweep would be killed. Failure still cannot fail the job.
+    try {
+      await sweepStalePromptDirs({ maxAgeMs: promptDirMaxAgeMs(options.config.timeoutMs) });
+    } catch (error: unknown) {
+      log.debug('prompt-directory sweep failed', error);
     }
   }
 }

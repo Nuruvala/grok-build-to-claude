@@ -226,7 +226,7 @@ describe('grok argv', () => {
   it('hands the child the same argv that buildGrokArgs produces for the same input', async () => {
     const input = {
       prompt: 'do the thing',
-      cwd: '/tmp/work',
+      cwd: '/tmp',
       model: 'grok-4.6',
       effort: 'high',
       maxTurns: 4,

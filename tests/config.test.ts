@@ -31,6 +31,10 @@ describe('loadConfig defaults', () => {
     assert.equal(config.timeoutMs, 30 * 60 * 1000);
   });
 
+  it('defaults the concurrent-run cap to 4', () => {
+    assert.equal(loadConfig(env()).maxConcurrentRuns, 4);
+  });
+
   it('returns a frozen object', () => {
     const config = loadConfig(env());
     assert.ok(Object.isFrozen(config));
@@ -180,6 +184,43 @@ describe('loadConfig sessions dir', () => {
     assert.ok(path.isAbsolute(config.sessionsDir));
     assert.ok(config.sessionsDir.endsWith(`${path.sep}rel-grok${path.sep}sessions`));
   });
+});
+
+describe('loadConfig max concurrent runs', () => {
+  it('treats an unset or empty value as the default', () => {
+    assert.equal(loadConfig(env()).maxConcurrentRuns, DEFAULTS.maxConcurrentRuns);
+    assert.equal(
+      loadConfig(env({ GROK_MCP_MAX_CONCURRENT_RUNS: '   ' })).maxConcurrentRuns,
+      DEFAULTS.maxConcurrentRuns,
+    );
+  });
+
+  for (const optOut of ['off', 'none', 'unlimited', 'OFF', 'None', 'UNLIMITED']) {
+    it(`treats "${optOut}" as no cap`, () => {
+      const config = loadConfig(env({ GROK_MCP_MAX_CONCURRENT_RUNS: optOut }));
+      assert.equal(config.maxConcurrentRuns, null);
+    });
+  }
+
+  it('accepts a positive integer', () => {
+    assert.equal(loadConfig(env({ GROK_MCP_MAX_CONCURRENT_RUNS: '8' })).maxConcurrentRuns, 8);
+  });
+
+  for (const bad of ['0', '-1', '1.5', 'abc']) {
+    it(`rejects ${bad} and names it in the ConfigError problem list`, () => {
+      assert.throws(
+        () => loadConfig(env({ GROK_MCP_MAX_CONCURRENT_RUNS: bad })),
+        (error: unknown) => {
+          assert.ok(error instanceof ConfigError);
+          assert.ok(
+            error.problems.some((problem) => problem.includes('GROK_MCP_MAX_CONCURRENT_RUNS')),
+          );
+          assert.ok(error.problems.some((problem) => problem.includes(bad)));
+          return true;
+        },
+      );
+    });
+  }
 });
 
 describe('loadConfig structuredContent', () => {

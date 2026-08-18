@@ -18,7 +18,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import type { Config } from './config.js';
-import { errorKind, toErrorText } from './errors.js';
+import { errorKind, isCallerFault, toErrorText } from './errors.js';
+import { promptDirMaxAgeMs, sweepStalePromptDirs } from './grok/prompt-file.js';
 import { log } from './log.js';
 import { toolDescriptors } from './tools/definitions.js';
 import { invokeTool, toolNames } from './tools/registry.js';
@@ -55,7 +56,10 @@ export function createServer(config: Config): Server {
         return result;
       } catch (error) {
         const kind = errorKind(error);
-        log.warn(`tool ${name} failed (${kind}) after ${Date.now() - started}ms`, error);
+        const detail = isCallerFault(kind)
+          ? (error instanceof Error ? error.message : toErrorText(error)).replace(/\n/g, '; ')
+          : error;
+        log.warn(`tool ${name} failed (${kind}) after ${Date.now() - started}ms`, detail);
 
         // Errors come back as a normal result with isError, not a thrown JSON-RPC error. Clients
         // hand the text to the model, which can then correct the call instead of stalling.
@@ -119,6 +123,12 @@ export async function startServer(config: Config): Promise<Server> {
   const transport = new StdioServerTransport();
 
   await server.connect(transport);
+
+  void sweepStalePromptDirs({ maxAgeMs: promptDirMaxAgeMs(config.timeoutMs) }).catch(
+    (error: unknown) => {
+      log.debug('prompt-directory sweep failed', error);
+    },
+  );
 
   log.info(
     `${SERVER_NAME} v${VERSION} ready on stdio ` +

@@ -83,8 +83,10 @@ describe('tools/list JSON Schema forbids additional properties', () => {
 describe('argv-element length caps', () => {
   const token = 't'.repeat(ARGV_TOKEN_MAX);
   const tokenOver = 't'.repeat(ARGV_TOKEN_MAX + 1);
-  const pathAt = 'p'.repeat(ARGV_PATH_MAX);
-  const pathOver = 'p'.repeat(ARGV_PATH_MAX + 1);
+  // Absolute: cwd refine rejects a relative string before the length check
+  // would accept it. `/` plus (MAX-1) p's is still ARGV_PATH_MAX characters.
+  const pathAt = `/${'p'.repeat(ARGV_PATH_MAX - 1)}`;
+  const pathOver = `/${'p'.repeat(ARGV_PATH_MAX)}`;
   const rulesAt = 'r'.repeat(ARGV_RULES_MAX);
   const rulesOver = 'r'.repeat(ARGV_RULES_MAX + 1);
   const itemAt = 'i'.repeat(ARGV_LIST_ITEM_MAX);
