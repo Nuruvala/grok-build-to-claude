@@ -285,6 +285,21 @@ function spawnErrorCode(error: Error): string | null {
   return 'code' in error && typeof error.code === 'string' ? error.code : null;
 }
 
+/**
+ * What the platform actually limits, because the two are not the same rule.
+ *
+ * Linux caps each argv element at MAX_ARG_STRLEN (128 KiB, 32 pages) on top of
+ * the much larger total. macOS has no per-element cap: ARG_MAX (1 MiB) covers
+ * every argument and the environment together, so a single large argument is
+ * fine there until the whole list is too big. Naming the wrong one sends the
+ * caller to shorten a value that was never the problem.
+ */
+function argvLimitClause(): string {
+  return process.platform === 'linux'
+    ? 'Linux caps a single argument at 128 KiB (MAX_ARG_STRLEN) on top of the total limit.'
+    : 'ARG_MAX covers every argument and the environment together on this platform.';
+}
+
 function spawnFailedMessage(binary: string, exec: ExecResult, args: readonly string[]): string {
   const error = exec.spawnError;
   const code = error === null ? null : spawnErrorCode(error);
@@ -295,9 +310,9 @@ function spawnFailedMessage(binary: string, exec: ExecResult, args: readonly str
         ? `The longest argument is ${bytes} bytes`
         : `${flag} is the longest argument (${bytes} bytes)`;
     return (
-      `Failed to start grok at "${binary}". One argument was too long for the operating system ` +
-      `to pass to a new process.\n\n` +
-      `${owner}, which exceeds the per-argument limit (128 KiB on Linux, MAX_ARG_STRLEN). ` +
+      `Failed to start grok at "${binary}". The argument list was too long for the operating ` +
+      `system to pass to a new process.\n\n` +
+      `${owner}, and ${argvLimitClause()} ` +
       'The prompt is written to a --prompt-file above a threshold, so look at the named flag ' +
       'rather than shortening the prompt. Installing the CLI or setting GROK_BINARY cannot fix this.'
     );

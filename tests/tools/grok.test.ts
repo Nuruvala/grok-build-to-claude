@@ -354,12 +354,19 @@ describe('grok result metadata', () => {
 
 describe('grok error paths preserve buffered output', () => {
   it('names --allow on E2BIG instead of telling the caller to install the CLI', async () => {
-    const { result } = await runGrok({ prompt: 'hi', allow: ['B'.repeat(200_000)] });
+    // 4 MiB in one element. Linux rejects it on MAX_ARG_STRLEN (128 KiB per
+    // element); macOS has no per-element cap, so the value has to be larger
+    // than the whole 1 MiB ARG_MAX to fail there at all. One size that is over
+    // both keeps this a test of the message rather than of a platform.
+    const { result } = await runGrok({ prompt: 'hi', allow: ['B'.repeat(4 * 1024 * 1024)] });
 
     assert.equal(result.isError, true);
     assert.match(textOf(result), /--allow/);
     assert.match(textOf(result), /too long for the operating system/);
-    assert.match(textOf(result), /128 KiB on Linux/);
+    assert.match(
+      textOf(result),
+      process.platform === 'linux' ? /128 KiB \(MAX_ARG_STRLEN\)/ : /ARG_MAX covers every argument/,
+    );
     assert.doesNotMatch(textOf(result), /Install the grok CLI/);
     assert.equal(metaOf(result)['outcome'], 'spawn-failed');
     assert.equal(metaOf(result)['sessionId'], undefined);

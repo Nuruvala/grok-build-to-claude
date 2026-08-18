@@ -32,8 +32,10 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ### Fixed
 
-- A spawn that fails with `E2BIG` now names the flag whose value was too long and the per-argument
-  limit, instead of telling the caller to install a CLI that is already installed.
+- A spawn that fails with `E2BIG` now names the flag whose value was longest and what the platform
+  actually limits — Linux caps a single argument at 128 KiB (`MAX_ARG_STRLEN`), macOS counts every
+  argument and the environment against one `ARG_MAX` — instead of telling the caller to install a
+  CLI that is already installed.
 - `help` no longer tells a timed-out caller to set `GROK_MCP_TIMEOUT_MS`. The help timeout is a
   `Math.min` against 15 seconds, so raising that variable cannot move the deadline.
 - V8 coverage is kept out of the processes the test suite deliberately kills. A killed child left a
