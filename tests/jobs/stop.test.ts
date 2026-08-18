@@ -542,7 +542,7 @@ describe('late-result preservation', () => {
       const consumedBy = Date.now() + 10_000;
       while (Date.now() < consumedBy) {
         const progress = await readProgress(stateDir, runId);
-        if (progress !== null && /finished/.test(progress.lastProgress ?? '')) break;
+        if (progress !== null && (progress.lastProgress ?? '').includes('finished')) break;
         await delay(20);
       }
 
