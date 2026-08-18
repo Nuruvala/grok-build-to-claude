@@ -534,9 +534,17 @@ describe('late-result preservation', () => {
         if (live?.state === 'running' && live.childPid !== null) break;
         await delay(20);
       }
-      // The fake writes its transcript before sleeping. Give the worker a
-      // tick to consume it so the abort path has an `end` event to parse.
-      await delay(50);
+      // The fake writes its transcript before sleeping, but "the worker has
+      // consumed it" is not something a fixed sleep can assert — a 50 ms wait
+      // passed on Linux and lost the `end` event on a slow macOS runner, so the
+      // late result arrived with no session id. Wait for the progress line the
+      // `end` event produces instead, which is the actual precondition.
+      const consumedBy = Date.now() + 10_000;
+      while (Date.now() < consumedBy) {
+        const progress = await readProgress(stateDir, runId);
+        if (progress !== null && /finished/.test(progress.lastProgress ?? '')) break;
+        await delay(20);
+      }
 
       const result = await stopTool.handler({ runId }, ctxFor(config));
       assert.notEqual(result.isError, true);
