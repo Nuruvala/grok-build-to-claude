@@ -14,7 +14,7 @@ import type { ToolContext, ToolResult } from '../../types.js';
 /** Same bound as the version/auth probes — help is not a 30-minute job. */
 const HELP_TIMEOUT_CAP_MS = 15_000;
 
-const HelpInput = z.object({}).describe('No arguments.').meta({ title: 'HelpInput' });
+const HelpInput = z.strictObject({}).describe('No arguments.').meta({ title: 'HelpInput' });
 
 export const helpTool = defineTool({
   name: 'help',

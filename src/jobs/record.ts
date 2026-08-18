@@ -8,6 +8,8 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { z } from 'zod';
+
 export const RUN_STATES = [
   'starting',
   'running',
@@ -105,7 +107,23 @@ export function timestampFromRunId(runId: string): number | null {
  * directory names is a recency sort: listing recent runs then costs one
  * `readdir` and no `stat`. The stamp is padded to 8 characters so the
  * ordering does not break at a digit boundary.
+ *
+ * The upper bound is slack for future timestamps, not a guess at a limit;
+ * base36 milliseconds are 8 characters until the year 5000.
  */
+export const RUN_ID_PATTERN = /^[0-9a-z]{8,16}-[0-9a-f]{8}$/;
+
+export const RunIdSchema = z
+  .string()
+  .regex(RUN_ID_PATTERN)
+  .describe(
+    'Background-run id (`<base36 ms>-<8 hex>`), from a background grok, review, or websearch result.',
+  );
+
+export function isRunId(value: string): boolean {
+  return RUN_ID_PATTERN.test(value);
+}
+
 export function newRunId(now: number, random?: () => string): string {
   const stamp = Math.trunc(now).toString(36).padStart(8, '0');
   const suffix = (random ?? defaultRandom)().slice(0, 8);

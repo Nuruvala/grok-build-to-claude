@@ -40,10 +40,11 @@ import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { InvalidArgumentsError, JobStoreError } from '../errors.js';
+import { InvalidArgumentsError, InvalidRunIdError, JobStoreError } from '../errors.js';
 import { log } from '../log.js';
 import {
   applyPatch,
+  isRunId,
   isTerminal,
   parseRunProgress,
   parseRunRecord,
@@ -96,6 +97,9 @@ export function runsRoot(stateDir: string): string {
 }
 
 export function runDir(stateDir: string, runId: string): string {
+  if (!isRunId(runId)) {
+    throw new InvalidRunIdError(runId);
+  }
   return path.join(runsRoot(stateDir), runId);
 }
 
@@ -220,10 +224,7 @@ export async function listRuns(
     throw new JobStoreError(stateDir, { cause: error, code: errorCode(error) });
   }
 
-  const names = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0));
+  const names = runDirectoryNames(entries);
 
   const scanCap = options.scanCap ?? LIST_SCAN_CAP;
   const truncated = names.length > scanCap;
@@ -570,8 +571,12 @@ export async function listRunIds(stateDir: string): Promise<readonly string[]> {
     if (errorCode(error) === 'ENOENT') return [];
     throw new JobStoreError(stateDir, { cause: error, code: errorCode(error) });
   }
+  return runDirectoryNames(entries);
+}
+
+function runDirectoryNames(entries: readonly { isDirectory(): boolean; name: string }[]): string[] {
   return entries
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && isRunId(entry.name))
     .map((entry) => entry.name)
     .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0));
 }

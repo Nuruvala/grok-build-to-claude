@@ -32,7 +32,7 @@ import type { ToolContext, ToolResult } from '../../types.js';
 const DEFAULT_LIMIT = 20;
 
 const SessionsInput = z
-  .object({
+  .strictObject({
     query: z
       .string()
       .min(1)

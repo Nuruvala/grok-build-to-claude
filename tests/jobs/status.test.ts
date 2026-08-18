@@ -5,8 +5,10 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { loadConfig } from '../../src/config.js';
+import { InvalidArgumentsError } from '../../src/errors.js';
 import { claimTerminal, createRun, writeLateResult, writeTerminal } from '../../src/jobs/store.js';
 import { statusTool } from '../../src/tools/handlers/status.js';
+import { invokeTool } from '../../src/tools/registry.js';
 import type { ToolContext, ToolResult } from '../../src/types.js';
 
 interface SessionsStore {
@@ -159,12 +161,12 @@ describe('status terminal isError', () => {
 
   it('shows a late result under the cancellation header and never as a completed run', async () => {
     const stateDir = await makeState();
-    await seedTerminal(stateDir, 'mtest0006-latexxxx', {
+    await seedTerminal(stateDir, 'mtest0006-1a7e0000', {
       state: 'cancelled',
       endedAt: '2026-08-17T12:00:00.000Z',
       error: 'Signalled SIGTERM to process group 1; the tree exited.',
     });
-    await writeLateResult(stateDir, 'mtest0006-latexxxx', {
+    await writeLateResult(stateDir, 'mtest0006-1a7e0000', {
       text: 'paid-for fragment',
       meta: {
         sessionId: '01a00c8d-970c-7531-8a12-31dac582c22b',
@@ -174,7 +176,7 @@ describe('status terminal isError', () => {
       isError: false,
     });
 
-    const result = await statusTool.handler({ runId: 'mtest0006-latexxxx' }, ctxFor(stateDir));
+    const result = await statusTool.handler({ runId: 'mtest0006-1a7e0000' }, ctxFor(stateDir));
     assert.notEqual(result.isError, true);
     assert.equal(metaOf(result)['state'], 'cancelled');
     assert.match(textOf(result), /This run was cancelled/);
@@ -191,7 +193,7 @@ describe('status terminal isError', () => {
 
   it('renders a stored result under the cancellation header and never as a completed run', async () => {
     const stateDir = await makeState();
-    await seedTerminal(stateDir, 'mtest0007-storedxx', {
+    await seedTerminal(stateDir, 'mtest0007-570aed00', {
       state: 'cancelled',
       endedAt: '2026-08-17T12:00:00.000Z',
       error: 'Signalled SIGTERM to process group 1; the tree exited.',
@@ -202,7 +204,7 @@ describe('status terminal isError', () => {
       },
     });
 
-    const result = await statusTool.handler({ runId: 'mtest0007-storedxx' }, ctxFor(stateDir));
+    const result = await statusTool.handler({ runId: 'mtest0007-570aed00' }, ctxFor(stateDir));
     assert.notEqual(result.isError, true);
     assert.equal(metaOf(result)['state'], 'cancelled');
     assert.match(textOf(result), /This run was cancelled/);
@@ -245,14 +247,14 @@ describe('status recovers a cancelled run session from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(sessionId, '/tmp', '2026-08-17T12:00:10.000Z'),
       });
-      await seedTerminal(stateDir, 'mtest0010-onestore', {
+      await seedTerminal(stateDir, 'mtest0010-0be570ae', {
         state: 'cancelled',
         startedAt: '2026-08-17T12:00:00.000Z',
         endedAt: '2026-08-17T12:00:20.000Z',
       });
 
       const result = await statusTool.handler(
-        { runId: 'mtest0010-onestore' },
+        { runId: 'mtest0010-0be570ae' },
         ctxFor(stateDir, { GROK_HOME: store.home }),
       );
       assert.notEqual(result.isError, true);
@@ -278,14 +280,14 @@ describe('status recovers a cancelled run session from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(second, '/tmp', '2026-08-17T12:00:12.000Z'),
       });
-      await seedTerminal(stateDir, 'mtest0011-twostore', {
+      await seedTerminal(stateDir, 'mtest0011-7e0570ae', {
         state: 'cancelled',
         startedAt: '2026-08-17T12:00:00.000Z',
         endedAt: '2026-08-17T12:00:20.000Z',
       });
 
       const result = await statusTool.handler(
-        { runId: 'mtest0011-twostore' },
+        { runId: 'mtest0011-7e0570ae' },
         ctxFor(stateDir, { GROK_HOME: store.home }),
       );
       assert.notEqual(result.isError, true);
@@ -305,14 +307,14 @@ describe('status recovers a cancelled run session from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(outsider, '/tmp', '2026-08-17T11:00:00.000Z'),
       });
-      await seedTerminal(stateDir, 'mtest0012-zerostor', {
+      await seedTerminal(stateDir, 'mtest0012-2ea0570a', {
         state: 'cancelled',
         startedAt: '2026-08-17T12:00:00.000Z',
         endedAt: '2026-08-17T12:00:20.000Z',
       });
 
       const result = await statusTool.handler(
-        { runId: 'mtest0012-zerostor' },
+        { runId: 'mtest0012-2ea0570a' },
         ctxFor(stateDir, { GROK_HOME: store.home }),
       );
       assert.notEqual(result.isError, true);
@@ -334,19 +336,19 @@ describe('status recovers a cancelled run session from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(fromStore, '/tmp', '2026-08-17T12:00:10.000Z'),
       });
-      await seedTerminal(stateDir, 'mtest0013-endwins', {
+      await seedTerminal(stateDir, 'mtest0013-ebd001b5', {
         state: 'cancelled',
         startedAt: '2026-08-17T12:00:00.000Z',
         endedAt: '2026-08-17T12:00:20.000Z',
       });
-      await writeLateResult(stateDir, 'mtest0013-endwins', {
+      await writeLateResult(stateDir, 'mtest0013-ebd001b5', {
         text: 'paid-for fragment',
         meta: { sessionId: fromEnd },
         isError: false,
       });
 
       const result = await statusTool.handler(
-        { runId: 'mtest0013-endwins' },
+        { runId: 'mtest0013-ebd001b5' },
         ctxFor(stateDir, { GROK_HOME: store.home }),
       );
       assert.notEqual(result.isError, true);
@@ -355,5 +357,20 @@ describe('status recovers a cancelled run session from the store', () => {
       assert.match(textOf(result), new RegExp(fromEnd));
       assert.doesNotMatch(textOf(result), new RegExp(fromStore));
     });
+  });
+});
+
+describe('status runId validation', () => {
+  it('rejects a traversing runId as invalid-arguments, not as a miss after a read', async () => {
+    const stateDir = await makeState();
+    await assert.rejects(
+      () => invokeTool('status', { runId: '../../../../etc' }, ctxFor(stateDir)),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.match(error.message, /runId/);
+        assert.doesNotMatch(error.message, /was found/);
+        return true;
+      },
+    );
   });
 });

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadConfig } from '../../src/config.js';
 import type { GrokStreamEvent } from '../../src/grok/stream.js';
-import { runGrok, streamingOutput } from '../../src/tools/run.js';
+import { longestArgvElement, runGrok, streamingOutput } from '../../src/tools/run.js';
 import type { ToolContext, ToolResult } from '../../src/types.js';
 
 const FAKE_GROK = fileURLToPath(new URL('../fixtures/fake-grok.mjs', import.meta.url));
@@ -78,6 +78,28 @@ function metaOf(result: ToolResult): Record<string, unknown> {
   assert.ok(block._meta);
   return block._meta;
 }
+
+describe('longestArgvElement', () => {
+  it('reports the longest element and the preceding flag when that element starts with -', () => {
+    assert.deepEqual(longestArgvElement(['-p', 'hi', '--allow', 'B'.repeat(40), '--cwd', '/tmp']), {
+      flag: '--allow',
+      bytes: 40,
+    });
+  });
+
+  it('reports flag null when the longest element has no preceding flag', () => {
+    assert.deepEqual(longestArgvElement(['just-a-value']), { flag: null, bytes: 12 });
+    assert.deepEqual(longestArgvElement([]), { flag: null, bytes: 0 });
+  });
+
+  it('counts multi-byte characters as bytes, not code units', () => {
+    // U+00E9 is two UTF-8 bytes; ten of them are 20 bytes, not 10.
+    assert.deepEqual(longestArgvElement(['--rules', 'é'.repeat(10)]), {
+      flag: '--rules',
+      bytes: 20,
+    });
+  });
+});
 
 describe('streamingOutput', () => {
   it('is false when --output-format is absent or not streaming-json', () => {

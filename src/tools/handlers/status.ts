@@ -18,6 +18,7 @@ import {
   isCutOff,
   isTerminal,
   mergeProgress,
+  RunIdSchema,
   type RunRecord,
   type StoredResult,
 } from '../../jobs/record.js';
@@ -44,12 +45,10 @@ const DEFAULT_LIMIT = 20;
 const POLL_INTERVAL_MS = 250;
 
 const StatusInput = z
-  .object({
-    runId: z
-      .string()
-      .min(1)
-      .optional()
-      .describe('Id of a background run to inspect. Omit to list recent runs.'),
+  .strictObject({
+    runId: RunIdSchema.optional().describe(
+      'Id of a background run to inspect. Omit to list recent runs.',
+    ),
     limit: z
       .number()
       .int()

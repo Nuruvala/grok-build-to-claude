@@ -10,15 +10,30 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+### Security
+
+- `runId` is validated as a path segment before it is joined onto the state directory. `status` and
+  `stop` accept only the shape `newRunId` issues (`<base36 ms>-<8 hex>`); `runDir` refuses anything
+  else, and directory listings skip names that are not run ids. Previously `path.join` normalised a
+  `runId` containing `..`, so a call could read a `record.json` — or, via `status` `tail`, a
+  `worker.log` — from any directory on the machine and return it to the model.
+
 ### Changed
 
 - Releases publish over [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC)
   instead of a stored `NPM_TOKEN`. Nothing holds a publish credential any more, and npm generates
   the provenance attestation without being asked. 0.1.0 was published with a token because a trusted
   publisher can only be attached to a package that already exists.
+- Tool input schemas are strict. An unrecognised key is `invalid-arguments` rather than silently
+  stripped, so a typo like `permision` for `permission` fails instead of quietly running at the
+  default permission level and reporting success.
+- Fields that become individual argv elements are length-capped (`src/limits.ts`). Prompt-shaped
+  text is not capped: it is delivered through `--prompt-file` above a threshold.
 
 ### Fixed
 
+- A spawn that fails with `E2BIG` now names the flag whose value was too long and the per-argument
+  limit, instead of telling the caller to install a CLI that is already installed.
 - `help` no longer tells a timed-out caller to set `GROK_MCP_TIMEOUT_MS`. The help timeout is a
   `Math.min` against 15 seconds, so raising that variable cannot move the deadline.
 - V8 coverage is kept out of the processes the test suite deliberately kills. A killed child left a

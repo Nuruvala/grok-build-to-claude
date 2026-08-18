@@ -14,7 +14,7 @@ import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
 import { SERVER_NAME, VERSION } from '../../version.js';
 
-const CheckInput = z.object({}).describe('No arguments.').meta({ title: 'CheckInput' });
+const CheckInput = z.strictObject({}).describe('No arguments.').meta({ title: 'CheckInput' });
 
 export const checkTool = defineTool({
   name: 'check',

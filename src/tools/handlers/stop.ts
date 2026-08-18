@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 import { elapsedMs, formatElapsed, formatTimestamp } from '../../jobs/format.js';
 import { processAlive, terminateRun, type KillOutcome } from '../../jobs/kill.js';
-import { isTerminal, type RunRecord, type StoredResult } from '../../jobs/record.js';
+import { isTerminal, RunIdSchema, type RunRecord, type StoredResult } from '../../jobs/record.js';
 import {
   claimTerminal,
   readLateResult,
@@ -37,11 +37,10 @@ import type { ToolContext, ToolResult } from '../../types.js';
 export const LATE_RESULT_WAIT_MS = 1500;
 const LATE_RESULT_POLL_MS = 100;
 
-const StopInput = z.object({
-  runId: z
-    .string()
-    .min(1)
-    .describe('The runId returned by a background `grok`, `review`, or `websearch` call.'),
+const StopInput = z.strictObject({
+  runId: RunIdSchema.describe(
+    'The runId returned by a background `grok`, `review`, or `websearch` call.',
+  ),
 });
 
 type StopInput = z.output<typeof StopInput>;

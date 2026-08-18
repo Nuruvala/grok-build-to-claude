@@ -87,7 +87,7 @@ async function seedRun(
 ): Promise<string> {
   const created = await createRun({
     stateDir,
-    runId: `wrk${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`,
+    runId: newRunId(Date.now()),
     tool,
     summary: 'test run',
     cwd: process.cwd(),
@@ -344,7 +344,7 @@ describe('retention sweep', () => {
 
     const keepNew = await createRun({
       stateDir,
-      runId: 'zzz00003-keepnewx',
+      runId: 'zzz00003-0ee0bee0',
       tool: 'grok',
       summary: 'keep',
       cwd: '/tmp',
@@ -352,7 +352,7 @@ describe('retention sweep', () => {
     });
     const dropCap = await createRun({
       stateDir,
-      runId: 'zzz00002-dropcapx',
+      runId: 'zzz00002-da0ca000',
       tool: 'grok',
       summary: 'drop cap',
       cwd: '/tmp',
@@ -360,7 +360,7 @@ describe('retention sweep', () => {
     });
     const live = await createRun({
       stateDir,
-      runId: 'zzz00001-livenowx',
+      runId: 'zzz00001-111e0000',
       tool: 'grok',
       summary: 'live',
       cwd: '/tmp',
@@ -368,7 +368,7 @@ describe('retention sweep', () => {
     });
     const unreadable = await createRun({
       stateDir,
-      runId: 'zzz00000-unreadable',
+      runId: 'zzz00000-0baeadab',
       tool: 'grok',
       summary: 'bad',
       cwd: '/tmp',
@@ -424,7 +424,7 @@ describe('retention sweep', () => {
     const oldMs = Date.UTC(2026, 6, 1);
     const stale = await createRun({
       stateDir,
-      runId: newRunId(oldMs, () => 'staleorx'),
+      runId: newRunId(oldMs, () => '57a1e0a0'),
       tool: 'grok',
       summary: 'stale orphan',
       cwd: '/tmp',
@@ -432,7 +432,7 @@ describe('retention sweep', () => {
     });
     const recent = await createRun({
       stateDir,
-      runId: newRunId(now, () => 'recentor'),
+      runId: newRunId(now, () => 'aece070a'),
       tool: 'grok',
       summary: 'recent orphan',
       cwd: '/tmp',

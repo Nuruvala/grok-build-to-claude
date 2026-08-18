@@ -141,8 +141,7 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
 
   if (exec.outcome === 'spawn-failed') {
     return errorResult(
-      `Failed to start grok at "${ctx.config.grokBinary}".${spawnCause(exec)}\n\n` +
-        'Install the grok CLI or set GROK_BINARY to its path.',
+      spawnFailedMessage(ctx.config.grokBinary, exec, request.args),
       exec,
       request,
       emptyResult(),
@@ -242,6 +241,33 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
 }
 
 /**
+ * The longest argv element and, when the preceding element is a flag, that flag.
+ *
+ * Used to name the owner of an E2BIG spawn without printing the value. A long
+ * prompt is not the cause — it is written to a `--prompt-file` above a
+ * threshold — so the caller should look at the named flag.
+ */
+export function longestArgvElement(args: readonly string[]): {
+  readonly flag: string | null;
+  readonly bytes: number;
+} {
+  let longestBytes = 0;
+  let longestIndex = -1;
+  for (let index = 0; index < args.length; index += 1) {
+    const element = args[index];
+    if (element === undefined) continue;
+    const bytes = Buffer.byteLength(element, 'utf8');
+    if (bytes > longestBytes) {
+      longestBytes = bytes;
+      longestIndex = index;
+    }
+  }
+  const previous = longestIndex > 0 ? args[longestIndex - 1] : undefined;
+  const flag = previous?.startsWith('-') === true ? previous : null;
+  return { flag, bytes: longestBytes };
+}
+
+/**
  * The reason the spawn failed, when the OS gave one.
  *
  * Without it every failure reads as "grok is not installed", and the advice that follows sends
@@ -251,8 +277,35 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
 function spawnCause(exec: ExecResult): string {
   const error = exec.spawnError;
   if (error === null) return '';
-  const code = 'code' in error && typeof error.code === 'string' ? error.code : null;
+  const code = spawnErrorCode(error);
   return code === null ? ` ${error.message}` : ` ${code}: ${error.message}`;
+}
+
+function spawnErrorCode(error: Error): string | null {
+  return 'code' in error && typeof error.code === 'string' ? error.code : null;
+}
+
+function spawnFailedMessage(binary: string, exec: ExecResult, args: readonly string[]): string {
+  const error = exec.spawnError;
+  const code = error === null ? null : spawnErrorCode(error);
+  if (code === 'E2BIG') {
+    const { flag, bytes } = longestArgvElement(args);
+    const owner =
+      flag === null
+        ? `The longest argument is ${bytes} bytes`
+        : `${flag} is the longest argument (${bytes} bytes)`;
+    return (
+      `Failed to start grok at "${binary}". One argument was too long for the operating system ` +
+      `to pass to a new process.\n\n` +
+      `${owner}, which exceeds the per-argument limit (128 KiB on Linux, MAX_ARG_STRLEN). ` +
+      'The prompt is written to a --prompt-file above a threshold, so look at the named flag ' +
+      'rather than shortening the prompt. Installing the CLI or setting GROK_BINARY cannot fix this.'
+    );
+  }
+  return (
+    `Failed to start grok at "${binary}".${spawnCause(exec)}\n\n` +
+    'Install the grok CLI or set GROK_BINARY to its path.'
+  );
 }
 
 interface StreamSession {

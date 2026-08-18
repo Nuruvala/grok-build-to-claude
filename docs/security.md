@@ -110,12 +110,16 @@ Plan mode alone looks equivalent to a deny rule and is not.
 The model reads content you did not write: a diff under review, files in the working directory, web
 pages and X posts during a `websearch`. That content can try to steer the agent.
 
-Two consequences, both already true in the code:
+Three consequences, all already true in the code:
 
 - `review` and `websearch` are pinned read-only and take no `permission`, `write`, or `yolo`
   argument, so no amount of steering turns them into a writer.
 - At `write` or `full`, a `grok` run acts on model output. That is the grant, working as configured;
   the mitigation is the ceiling, the working directory you point it at, and version control.
+- `status` and `stop` take a `runId` from the model. That value is a path segment under the state
+  directory. It is accepted only in the shape `newRunId` issues (`<base36 ms>-<8 hex>`), so a value
+  containing `..` is `invalid-arguments` and never joined onto the store root. A miss is a
+  well-formed id the store does not have; a traversal is not a miss.
 
 This server does not filter, scan, or redact prompts, and it does not inspect what the model decided
 to do.
@@ -148,6 +152,11 @@ Four places, none of them encrypted:
   diff — plus the result and the progress log. Created `0700` with `0600` files as of this version.
   A directory created by an earlier version keeps its old mode; tighten it once with
   `chmod -R go-rwx` on the state directory.
+
+  A `runId` is a path segment under this tree, never a path the caller chooses. `runDir` refuses any
+  name that is not `<base36 ms>-<8 hex>` before `path.join`, and directory listings skip names that
+  are not run ids, so a foreign folder dropped in the state dir is neither listed nor swept. That is
+  the boundary that keeps `status` (which can return `worker.log` via `tail`) inside the store.
 
   A retention sweep runs after each worker finishes: it deletes terminal records older than 14 days,
   terminal records past the newest 200 directories of any state, and non-terminal records that are

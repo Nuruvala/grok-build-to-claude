@@ -16,6 +16,13 @@ import type { SessionSelector } from '../../grok/args.js';
 import { withPromptDelivery } from '../../grok/prompt-file.js';
 import { summarize } from '../../jobs/record.js';
 import { startBackgroundRun } from '../../jobs/spawn.js';
+import {
+  ARGV_LIST_ITEM_MAX,
+  ARGV_LIST_MAX,
+  ARGV_PATH_MAX,
+  ARGV_RULES_MAX,
+  ARGV_TOKEN_MAX,
+} from '../../limits.js';
 import { requestedPermissionLevel, resolvePermission } from '../../permission.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
@@ -24,7 +31,7 @@ import { runGrok } from '../run.js';
 const PermissionLevelSchema = z.enum(['read-only', 'write', 'full']);
 
 const GrokInput = z
-  .object({
+  .strictObject({
     prompt: z
       .string()
       .min(1)
@@ -37,16 +44,19 @@ const GrokInput = z
     cwd: z
       .string()
       .min(1)
+      .max(ARGV_PATH_MAX)
       .optional()
       .describe('Working directory for the run. Passed as `--cwd`. Use the narrowest useful path.'),
     model: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server.',
       ),
     effort: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise.',
@@ -73,30 +83,45 @@ const GrokInput = z
       .optional()
       .describe('Maximum agentic turns. Passed as `--max-turns`. Headless only.'),
     tools: z
-      .array(z.string())
+      .array(z.string().max(ARGV_LIST_ITEM_MAX))
+      .max(ARGV_LIST_MAX)
       .optional()
       .describe(
         'Internal tool ids to allow, passed as a single comma-joined `--tools`. Shell is `run_terminal_command`, not `bash`.',
       ),
     disallowedTools: z
-      .array(z.string())
+      .array(z.string().max(ARGV_LIST_ITEM_MAX))
+      .max(ARGV_LIST_MAX)
       .optional()
       .describe('Internal tool ids to block, passed as `--disallowed-tools`.'),
     allow: z
-      .array(z.string())
+      .array(z.string().max(ARGV_LIST_ITEM_MAX))
+      .max(ARGV_LIST_MAX)
       .optional()
       .describe(
         'Repeatable allow rules in `ToolPrefix(glob)` form, e.g. `Bash(npm*)`, `Write(src/**)`.',
       ),
     deny: z
-      .array(z.string())
+      .array(z.string().max(ARGV_LIST_ITEM_MAX))
+      .max(ARGV_LIST_MAX)
       .optional()
       .describe('Repeatable deny rules in `ToolPrefix(glob)` form, e.g. `Read(.env)`.'),
-    rules: z.string().optional().describe('Extra system-prompt text, passed as `--rules`.'),
-    agent: z.string().optional().describe('Named subagent to run, passed as `--agent`.'),
+    rules: z
+      .string()
+      .max(ARGV_RULES_MAX)
+      .optional()
+      .describe(
+        'Extra system-prompt text, passed as `--rules`. Longer system-prompt text belongs in the prompt.',
+      ),
+    agent: z
+      .string()
+      .max(ARGV_TOKEN_MAX)
+      .optional()
+      .describe('Named subagent to run, passed as `--agent`.'),
     resume: z
       .string()
       .min(1)
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Resume an existing session by id or title (`--resume`). Mutually exclusive with `continueSession`. Combine with `forkSession` to fork rather than continue in place.',
@@ -110,6 +135,7 @@ const GrokInput = z
     forkSession: z
       .string()
       .min(1)
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'UUID for a forked session. Requires `resume` or `continueSession`. Passed as `--fork-session --session-id`.',
@@ -117,6 +143,7 @@ const GrokInput = z
     sessionId: z
       .string()
       .min(1)
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Create a NEW session with this UUID (`--session-id`). Cannot be combined with `resume` or `continueSession`; use `forkSession` to name a fork.',

@@ -432,7 +432,7 @@ describe('status orphan and wait', () => {
     const config = isolatedConfig(stateDir, binary);
     const created = await createRun({
       stateDir,
-      runId: 'wait0001-stillrun',
+      runId: 'wait0001-5711170b',
       tool: 'grok',
       summary: 'waiting',
       cwd: '/tmp',

@@ -89,6 +89,11 @@ describe('MCP protocol', () => {
     for (const tool of tools) {
       assert.ok(tool.description, `${tool.name} must advertise a description`);
       assert.equal(tool.inputSchema.type, 'object', `${tool.name} inputSchema must be an object`);
+      assert.equal(
+        tool.inputSchema['additionalProperties'],
+        false,
+        `${tool.name} must reject unrecognised keys`,
+      );
     }
 
     const check = tools[0];
@@ -165,13 +170,16 @@ describe('MCP protocol', () => {
     assert.equal(annotations.readOnlyHint, false);
     assert.equal(annotations.idempotentHint, true);
 
-    const result = await client.callTool({ name: 'stop', arguments: { runId: 'nope-not-a-run' } });
+    const result = await client.callTool({
+      name: 'stop',
+      arguments: { runId: '00000000-00000000' },
+    });
     assert.notEqual(result.isError, true);
     const content = result.content as { text: string; _meta: Record<string, unknown> }[];
     const [block] = content;
     assert.ok(block);
     assert.equal(block._meta['found'], false);
-    assert.match(block.text, /nope-not-a-run/);
+    assert.match(block.text, /00000000-00000000/);
   });
 
   it('calls help and returns the grok --help text from the fake', async () => {

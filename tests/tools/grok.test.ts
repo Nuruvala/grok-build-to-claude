@@ -353,6 +353,18 @@ describe('grok result metadata', () => {
 });
 
 describe('grok error paths preserve buffered output', () => {
+  it('names --allow on E2BIG instead of telling the caller to install the CLI', async () => {
+    const { result } = await runGrok({ prompt: 'hi', allow: ['B'.repeat(200_000)] });
+
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /--allow/);
+    assert.match(textOf(result), /too long for the operating system/);
+    assert.match(textOf(result), /128 KiB on Linux/);
+    assert.doesNotMatch(textOf(result), /Install the grok CLI/);
+    assert.equal(metaOf(result)['outcome'], 'spawn-failed');
+    assert.equal(metaOf(result)['sessionId'], undefined);
+  });
+
   it('returns isError on spawn-failed and names GROK_BINARY, without inventing a session', async () => {
     const result = await grokTool.handler(
       { prompt: 'hi' },

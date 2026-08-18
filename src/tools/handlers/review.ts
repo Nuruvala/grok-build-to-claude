@@ -13,6 +13,7 @@ import { buildGrokArgs } from '../../grok/args.js';
 import { withPromptDelivery } from '../../grok/prompt-file.js';
 import type { GrokRunResult } from '../../grok/result.js';
 import { startBackgroundRun } from '../../jobs/spawn.js';
+import { ARGV_PATH_MAX, ARGV_TOKEN_MAX } from '../../limits.js';
 import { permissionFlags } from '../../permission.js';
 import { truncateDiff } from '../../review/diff.js';
 import type { TruncatedDiff } from '../../review/diff.js';
@@ -56,17 +57,19 @@ const REVIEW_DENY_RULES: readonly string[] = Object.freeze(['Bash(*)', 'Edit(*)'
 const META_FILE_CAP = 200;
 
 const ReviewInput = z
-  .object({
+  .strictObject({
     // Same `.min(1)` reasoning as the `grok` tool: the argv builder drops an empty
     // `--cwd`, so `""` would silently review whatever directory the server lives in.
     cwd: z
       .string()
       .min(1)
+      .max(ARGV_PATH_MAX)
       .optional()
       .describe('Repository to review. Defaults to the current working directory.'),
     base: z
       .string()
       .min(1)
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Review the merge-base diff against this ref. Mutually exclusive with commit and uncommitted.',
@@ -74,6 +77,7 @@ const ReviewInput = z
     commit: z
       .string()
       .min(1)
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe('Review this commit. Mutually exclusive with base and uncommitted.'),
     uncommitted: z
@@ -94,12 +98,14 @@ const ReviewInput = z
       ),
     model: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server.',
       ),
     effort: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise.',

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   applyPatch,
   isCutOff,
+  isRunId,
   isRunState,
   isTerminal,
   mergeProgress,
@@ -11,6 +12,8 @@ import {
   parseRunProgress,
   parseRunRecord,
   RECORD_SCHEMA_VERSION,
+  RUN_ID_PATTERN,
+  RunIdSchema,
   SUMMARY_MAX_CHARS,
   summarize,
   timestampFromRunId,
@@ -131,6 +134,37 @@ describe('newRunId', () => {
     assert.equal(stampWidth, last.split('-')[0]?.length);
     assert.equal(stampWidth, 8);
     assert.ok(first < last);
+  });
+});
+
+describe('isRunId', () => {
+  const rejected: readonly (readonly [string, string])[] = [
+    ['../../../../etc', 'parent-directory traversal'],
+    ['../..', 'parent segments only'],
+    ['.', 'the current-directory segment'],
+    ['..', 'the parent-directory segment'],
+    ['/etc/passwd', 'an absolute path'],
+    ['a/b', 'an embedded slash'],
+    ['a\0b', 'a null byte'],
+    ['', 'the empty string'],
+    ['x'.repeat(5000), 'a 5000-character string'],
+  ];
+
+  for (const [value, why] of rejected) {
+    it(`rejects ${why}, so it cannot be joined onto the state directory`, () => {
+      assert.equal(isRunId(value), false);
+      assert.equal(RUN_ID_PATTERN.test(value), false);
+      assert.equal(RunIdSchema.safeParse(value).success, false);
+    });
+  }
+
+  it('accepts two ids issued by newRunId, which is the only shape this server writes', () => {
+    const first = newRunId(Date.now());
+    const second = newRunId(Date.now() + 1);
+    assert.equal(isRunId(first), true);
+    assert.equal(isRunId(second), true);
+    assert.equal(RunIdSchema.safeParse(first).success, true);
+    assert.equal(RunIdSchema.safeParse(second).success, true);
   });
 });
 

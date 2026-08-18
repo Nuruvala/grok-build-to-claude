@@ -15,6 +15,7 @@ import { withPromptDelivery } from '../../grok/prompt-file.js';
 import type { GrokRunResult } from '../../grok/result.js';
 import { summarize } from '../../jobs/record.js';
 import { startBackgroundRun } from '../../jobs/spawn.js';
+import { ARGV_PATH_MAX, ARGV_TOKEN_MAX } from '../../limits.js';
 import { permissionFlags } from '../../permission.js';
 import { defineTool } from '../../types.js';
 import type { ToolContext, ToolResult } from '../../types.js';
@@ -37,7 +38,7 @@ import type { GrokRunMeta } from '../run.js';
 const WEBSEARCH_DENY_RULES: readonly string[] = Object.freeze(['Bash(*)', 'Edit(*)', 'Write(*)']);
 
 const WebSearchInput = z
-  .object({
+  .strictObject({
     query: z
       .string()
       .min(1)
@@ -67,18 +68,21 @@ const WebSearchInput = z
     cwd: z
       .string()
       .min(1)
+      .max(ARGV_PATH_MAX)
       .optional()
       .describe(
         'Working directory for the run. Passed as `--cwd`. Defaults to the current working directory.',
       ),
     model: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server.',
       ),
     effort: z
       .string()
+      .max(ARGV_TOKEN_MAX)
       .optional()
       .describe(
         'Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise.',

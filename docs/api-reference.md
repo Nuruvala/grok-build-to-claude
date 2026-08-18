@@ -47,6 +47,15 @@ Three environment variables change a run at call time. Everything else is in the
 default-value variables. There is no spelling that passes the literal string `default` as a model or
 effort id.
 
+Every tool schema is strict. An unrecognised key is `invalid-arguments`, not stripped. That is how a
+typo (`permision` for `permission`) used to become a silent read-only run. MCP clients put `_meta`
+on `params`, not inside `arguments`, so a well-formed call is not rejected for progress metadata.
+
+Fields that become individual argv elements are length-capped in `src/limits.ts` so a call cannot
+routinely hit Linux `MAX_ARG_STRLEN` (128 KiB per element). Prompt-shaped text (`grok.prompt`,
+`review.instructions`, `websearch.query`, `websearch.instructions`) is not capped: it is folded into
+the prompt and delivered through `--prompt-file` above a threshold.
+
 ### Shared `_meta` (grok, review, websearch)
 
 On a successful parse, `src/tools/run.ts` writes these keys. Handler keys are merged first so the
@@ -92,19 +101,19 @@ Thrown failures become a normal tool result with `isError: true`. The text is th
 then a blank line and the remedy when one exists. `_meta` is `{ errorKind }`. Argument validation
 names every problem at once rather than the first, so one corrected call is enough.
 
-| `errorKind`         | When                                                                                                     | What to do                                                                                                |
-| ------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `config`            | Bad environment at process start. The server never serves                                                | Fix the named variables and restart                                                                       |
-| `invalid-arguments` | Schema failure, or a mutually exclusive combination the handler rejects                                  | Read every `- ` line; fix them together                                                                   |
-| `unknown-tool`      | `tools/call` named something this server does not register                                               | Use a name from the remedy list                                                                           |
-| `permission-denied` | `grok` asked for a level above `GROK_MCP_PERMISSION_CEILING`. Never clamped                              | Re-register with `GROK_MCP_PERMISSION_CEILING` set to the requested level. See [security.md](security.md) |
-| `git-failed`        | `review` could not run git: missing binary, not a repo, or a ref that does not resolve                   | Install git, pass a real working tree as `cwd`, or name a ref that exists                                 |
-| `sessions-store`    | The session store root is unreadable (`EACCES`, `ENOTDIR`, …). Missing is not this error                 | Check the named directory, or set `GROK_HOME` to the directory that contains `sessions/`                  |
-| `job-store`         | The background-run store root is unreadable. Missing is not this error                                   | Check the named directory, or set `GROK_MCP_STATE_DIR` to a writable path                                 |
-| `binary-not-found`  | In the taxonomy; not currently thrown. A missing binary is a run envelope with `outcome: "spawn-failed"` | Install the CLI or set `GROK_BINARY`                                                                      |
-| `grok-failed`       | In the taxonomy; not currently thrown. CLI `{type:"error"}` is a run envelope                            | Read the body; it quotes the CLI message                                                                  |
-| `timeout`           | In the taxonomy; not currently thrown. A wall-clock kill is a run envelope with `outcome: "timeout"`     | Raise `GROK_MCP_TIMEOUT_MS`                                                                               |
-| `internal`          | Anything thrown that is not a `GrokMcpError`                                                             | Treat as a server bug; the text is the exception message                                                  |
+| `errorKind`         | When                                                                                                                             | What to do                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `config`            | Bad environment at process start. The server never serves                                                                        | Fix the named variables and restart                                                                       |
+| `invalid-arguments` | Schema failure (unknown key, over-length argv field, malformed `runId`), or a mutually exclusive combination the handler rejects | Read every `- ` line; fix them together                                                                   |
+| `unknown-tool`      | `tools/call` named something this server does not register                                                                       | Use a name from the remedy list                                                                           |
+| `permission-denied` | `grok` asked for a level above `GROK_MCP_PERMISSION_CEILING`. Never clamped                                                      | Re-register with `GROK_MCP_PERMISSION_CEILING` set to the requested level. See [security.md](security.md) |
+| `git-failed`        | `review` could not run git: missing binary, not a repo, or a ref that does not resolve                                           | Install git, pass a real working tree as `cwd`, or name a ref that exists                                 |
+| `sessions-store`    | The session store root is unreadable (`EACCES`, `ENOTDIR`, …). Missing is not this error                                         | Check the named directory, or set `GROK_HOME` to the directory that contains `sessions/`                  |
+| `job-store`         | The background-run store root is unreadable. Missing is not this error                                                           | Check the named directory, or set `GROK_MCP_STATE_DIR` to a writable path                                 |
+| `binary-not-found`  | In the taxonomy; not currently thrown. A missing binary is a run envelope with `outcome: "spawn-failed"`                         | Install the CLI or set `GROK_BINARY`                                                                      |
+| `grok-failed`       | In the taxonomy; not currently thrown. CLI `{type:"error"}` is a run envelope                                                    | Read the body; it quotes the CLI message                                                                  |
+| `timeout`           | In the taxonomy; not currently thrown. A wall-clock kill is a run envelope with `outcome: "timeout"`                             | Raise `GROK_MCP_TIMEOUT_MS`                                                                               |
+| `internal`          | Anything thrown that is not a `GrokMcpError`                                                                                     | Treat as a server bug; the text is the exception message                                                  |
 
 ### Background runs
 
@@ -116,16 +125,16 @@ an MCP server restart. Poll with [`status`](#status); terminate with [`stop`](#s
 
 Spawn-path `_meta`:
 
-| Key         | Type             | When         | Meaning                                       |
-| ----------- | ---------------- | ------------ | --------------------------------------------- |
-| `runId`     | `string`         | always       | Id to pass to `status` / `stop`               |
-| `state`     | `"starting"`     | success      | The worker has been spawned                   |
-| `state`     | `"failed"`       | spawn failed | The worker never started                      |
-| `tool`      | `string`         | always       | `grok`, `review`, or `websearch`              |
-| `cwd`       | `string`         | always       | Working directory recorded for the run        |
-| `workerPid` | `number \| null` | always       | Worker pid, or `null` if it could not be read |
-| `createdAt` | `string`         | always       | ISO timestamp of the record                   |
-| `summary`   | `string`         | always       | Short label from the prompt / target          |
+| Key         | Type             | When         | Meaning                                                                                                                                      |
+| ----------- | ---------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runId`     | `string`         | always       | Id to pass to `status` / `stop`. Shape is `<base36 ms>-<8 hex>` (e.g. `msyi8cve-c89e63a4`); anything else is `invalid-arguments`, not a miss |
+| `state`     | `"starting"`     | success      | The worker has been spawned                                                                                                                  |
+| `state`     | `"failed"`       | spawn failed | The worker never started                                                                                                                     |
+| `tool`      | `string`         | always       | `grok`, `review`, or `websearch`                                                                                                             |
+| `cwd`       | `string`         | always       | Working directory recorded for the run                                                                                                       |
+| `workerPid` | `number \| null` | always       | Worker pid, or `null` if it could not be read                                                                                                |
+| `createdAt` | `string`         | always       | ISO timestamp of the record                                                                                                                  |
+| `summary`   | `string`         | always       | Short label from the prompt / target                                                                                                         |
 
 The body on success is `Started <tool> run <runId> in the background.` plus example `status` calls.
 A spawn failure is `isError: true` and says the run will never execute.
@@ -141,23 +150,23 @@ or fork, model and effort, and tool allow/deny. Permission is capped by
 | Parameter          | Type                               | Default                       | Description                                                                                                                                                         |
 | ------------------ | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`           | `string`                           | —                             | The task for Grok to perform. Passed verbatim as `grok -p`                                                                                                          |
-| `cwd`              | `string`                           | none                          | Working directory for the run. Passed as `--cwd`. Use the narrowest useful path                                                                                     |
-| `model`            | `string`                           | `GROK_MCP_DEFAULT_MODEL`      | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                              |
-| `effort`           | `string`                           | `GROK_MCP_DEFAULT_EFFORT`     | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise                 |
+| `cwd`              | `string` (≤4096)                   | none                          | Working directory for the run. Passed as `--cwd`. Use the narrowest useful path. Capped because it is one argv element                                              |
+| `model`            | `string` (≤256)                    | `GROK_MCP_DEFAULT_MODEL`      | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                              |
+| `effort`           | `string` (≤256)                    | `GROK_MCP_DEFAULT_EFFORT`     | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise                 |
 | `permission`       | `"read-only" \| "write" \| "full"` | `GROK_MCP_DEFAULT_PERMISSION` | Permission level for this run. Must be at or below `GROK_MCP_PERMISSION_CEILING`. Omit to use the server default. See [security.md](security.md)                    |
 | `write`            | `boolean`                          | none                          | Shorthand for `permission: "write"`. Ignored when `permission` is set. `false` is not a request                                                                     |
 | `yolo`             | `boolean`                          | none                          | Shorthand for `permission: "full"`. Ignored when `permission` is set. `false` is not a request                                                                      |
 | `maxTurns`         | `number (int, ≥1)`                 | none                          | Maximum agentic turns. Passed as `--max-turns`. Headless only                                                                                                       |
-| `tools`            | `string[]`                         | none                          | Internal tool ids to allow, passed as a single comma-joined `--tools`. Shell is `run_terminal_command`, not `bash`                                                  |
-| `disallowedTools`  | `string[]`                         | none                          | Internal tool ids to block, passed as `--disallowed-tools`                                                                                                          |
-| `allow`            | `string[]`                         | none                          | Repeatable allow rules in `ToolPrefix(glob)` form, e.g. `Bash(npm*)`, `Write(src/**)`                                                                               |
-| `deny`             | `string[]`                         | none                          | Repeatable deny rules in `ToolPrefix(glob)` form, e.g. `Read(.env)`                                                                                                 |
-| `rules`            | `string`                           | none                          | Extra system-prompt text, passed as `--rules`                                                                                                                       |
-| `agent`            | `string`                           | none                          | Named subagent to run, passed as `--agent`                                                                                                                          |
-| `resume`           | `string`                           | none                          | Resume an existing session by id or title (`--resume`). Mutually exclusive with `continueSession`. Combine with `forkSession` to fork rather than continue in place |
+| `tools`            | `string[]` (≤100 × ≤512)           | none                          | Internal tool ids to allow, passed as a single comma-joined `--tools`. Shell is `run_terminal_command`, not `bash`                                                  |
+| `disallowedTools`  | `string[]` (≤100 × ≤512)           | none                          | Internal tool ids to block, passed as `--disallowed-tools`                                                                                                          |
+| `allow`            | `string[]` (≤100 × ≤512)           | none                          | Repeatable allow rules in `ToolPrefix(glob)` form, e.g. `Bash(npm*)`, `Write(src/**)`                                                                               |
+| `deny`             | `string[]` (≤100 × ≤512)           | none                          | Repeatable deny rules in `ToolPrefix(glob)` form, e.g. `Read(.env)`                                                                                                 |
+| `rules`            | `string` (≤8192)                   | none                          | Extra system-prompt text, passed as `--rules`. Longer system-prompt text belongs in the prompt                                                                      |
+| `agent`            | `string` (≤256)                    | none                          | Named subagent to run, passed as `--agent`                                                                                                                          |
+| `resume`           | `string` (≤256)                    | none                          | Resume an existing session by id or title (`--resume`). Mutually exclusive with `continueSession`. Combine with `forkSession` to fork rather than continue in place |
 | `continueSession`  | `boolean`                          | none                          | Continue the most recent session for `cwd` (`--continue`). Mutually exclusive with `resume`. `false` is not a request                                               |
-| `forkSession`      | `string`                           | none                          | UUID for a forked session. Requires `resume` or `continueSession`. Passed as `--fork-session --session-id`                                                          |
-| `sessionId`        | `string`                           | none                          | Create a new session with this UUID (`--session-id`). Cannot be combined with `resume` or `continueSession`; use `forkSession` to name a fork                       |
+| `forkSession`      | `string` (≤256)                    | none                          | UUID for a forked session. Requires `resume` or `continueSession`. Passed as `--fork-session --session-id`                                                          |
+| `sessionId`        | `string` (≤256)                    | none                          | Create a new session with this UUID (`--session-id`). Cannot be combined with `resume` or `continueSession`; use `forkSession` to name a fork                       |
 | `disableWebSearch` | `boolean`                          | none                          | Pass `--disable-web-search`. `false` is not a request                                                                                                               |
 | `background`       | `boolean`                          | none                          | Run detached and return a `runId` immediately instead of waiting. Poll with `status`. The run survives a restart of this MCP server. `false` is not a request       |
 
@@ -179,9 +188,10 @@ Rejected before spawn, as `invalid-arguments`, with every conflict listed:
 
 `content[0].text` is the model text, plus the envelope suffix when the run exited non-zero or
 stopped early. Failure paths that never produced a parsed result are a diagnostic body: spawn
-failure (install the CLI or set `GROK_BINARY`), timeout (`GROK_MCP_TIMEOUT_MS`), client abort, a
-quoted CLI `{type:"error"}` message, a partial stream, or unparseable JSON with a 4000-character
-preview.
+failure (a missing binary names `GROK_BINARY`; `E2BIG` names the longest flag and the 128 KiB Linux
+per-argument limit, and does not tell you to install the CLI), timeout (`GROK_MCP_TIMEOUT_MS`),
+client abort, a quoted CLI `{type:"error"}` message, a partial stream, or unparseable JSON with a
+4000-character preview.
 
 A background call returns the spawn text in [Background runs](#background-runs), not model text.
 
@@ -217,14 +227,14 @@ ahead, otherwise the working tree.
 
 | Parameter      | Type               | Default                   | Description                                                                                                                                                                                                                                                                                  |
 | -------------- | ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cwd`          | `string`           | process cwd               | Repository to review. Defaults to the current working directory                                                                                                                                                                                                                              |
-| `base`         | `string`           | none                      | Review the merge-base diff against this ref. Mutually exclusive with `commit` and `uncommitted`                                                                                                                                                                                              |
-| `commit`       | `string`           | none                      | Review this commit. Mutually exclusive with `base` and `uncommitted`                                                                                                                                                                                                                         |
+| `cwd`          | `string` (≤4096)   | process cwd               | Repository to review. Defaults to the current working directory. Capped because it is one `--cwd` argv element                                                                                                                                                                               |
+| `base`         | `string` (≤256)    | none                      | Review the merge-base diff against this ref. Mutually exclusive with `commit` and `uncommitted`. Capped because it is one argv element                                                                                                                                                       |
+| `commit`       | `string` (≤256)    | none                      | Review this commit. Mutually exclusive with `base` and `uncommitted`. Capped because it is one argv element                                                                                                                                                                                  |
 | `uncommitted`  | `boolean`          | none                      | Review the working tree (staged, unstaged, and untracked). Mutually exclusive with `base` and `commit`. `false` is not a request                                                                                                                                                             |
 | `instructions` | `string`           | none                      | Extra reviewer guidance, appended verbatim to the prompt                                                                                                                                                                                                                                     |
 | `structured`   | `boolean`          | none                      | Return machine-readable findings via `--json-schema`. A run that stops before a final findings object fails the call with `reviewIncomplete`. Malformed model JSON after a normal stop degrades to raw text plus a `parseError` field rather than failing the call. `false` is not a request |
-| `model`        | `string`           | `GROK_MCP_DEFAULT_MODEL`  | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                                                                                                                                                       |
-| `effort`       | `string`           | `GROK_MCP_DEFAULT_EFFORT` | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise                                                                                                                                          |
+| `model`        | `string` (≤256)    | `GROK_MCP_DEFAULT_MODEL`  | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                                                                                                                                                       |
+| `effort`       | `string` (≤256)    | `GROK_MCP_DEFAULT_EFFORT` | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise                                                                                                                                          |
 | `maxTurns`     | `number (int, ≥1)` | none                      | Maximum agentic turns. Passed as `--max-turns`. Headless only                                                                                                                                                                                                                                |
 | `background`   | `boolean`          | none                      | Run detached and return a `runId` immediately instead of waiting. Poll with `status`. The run survives a restart of this MCP server. `false` is not a request                                                                                                                                |
 
@@ -345,9 +355,9 @@ sources, and you need to see which searches and URLs the run actually used.
 | `numResults`   | `number (int, 1–50)` | none                      | Prompt-level target for how many distinct sources to cite, not a backend limit. The CLI has no `--num-results` flag                                           |
 | `searchDepth`  | `"basic" \| "full"`  | `basic`                   | Prompt-level search depth. `basic` asks for one round; `full` asks for more than one, from different angles. The CLI has no `--search-depth` flag             |
 | `instructions` | `string`             | none                      | Extra researcher guidance, appended verbatim to the prompt                                                                                                    |
-| `cwd`          | `string`             | process cwd               | Working directory for the run. Passed as `--cwd`. Defaults to the current working directory                                                                   |
-| `model`        | `string`             | `GROK_MCP_DEFAULT_MODEL`  | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                        |
-| `effort`       | `string`             | `GROK_MCP_DEFAULT_EFFORT` | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise           |
+| `cwd`          | `string` (≤4096)     | process cwd               | Working directory for the run. Passed as `--cwd`. Defaults to the current working directory. Capped because it is one argv element                            |
+| `model`        | `string` (≤256)      | `GROK_MCP_DEFAULT_MODEL`  | Model id to pass as `--model`. Omit to use the server default. Unknown ids are rejected by the CLI, not by this server                                        |
+| `effort`       | `string` (≤256)      | `GROK_MCP_DEFAULT_EFFORT` | Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise           |
 | `maxTurns`     | `number (int, ≥1)`   | none                      | Maximum agentic turns. Passed as `--max-turns`. Headless only. No default — a cap is how a run gets cut off mid-research                                      |
 | `background`   | `boolean`            | none                      | Run detached and return a `runId` immediately instead of waiting. Poll with `status`. The run survives a restart of this MCP server. `false` is not a request |
 
@@ -534,12 +544,12 @@ metadata, same error flag — so background is a transport, not a second impleme
 
 ### Parameters
 
-| Parameter | Type                     | Default | Description                                                                                                      |
-| --------- | ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| `runId`   | `string`                 | none    | Id of a background run to inspect. Omit to list recent runs                                                      |
-| `limit`   | `number (int, 1–100)`    | `20`    | Maximum rows to return in list mode. Ignored when `runId` is set                                                 |
-| `waitMs`  | `number (int, 0–120000)` | `0`     | Block up to this many milliseconds for the run to finish. Ignored in list mode. A timed-out wait is not an error |
-| `tail`    | `number (int, 0–65536)`  | `8192`  | Bytes of `progress.log` to include for a live run                                                                |
+| Parameter | Type                             | Default | Description                                                                                                                                              |
+| --------- | -------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runId`   | `string` (`<base36 ms>-<8 hex>`) | none    | Id of a background run to inspect. Omit to list recent runs. A value that is not this shape is `invalid-arguments`, not a miss — the store is not opened |
+| `limit`   | `number (int, 1–100)`            | `20`    | Maximum rows to return in list mode. Ignored when `runId` is set                                                                                         |
+| `waitMs`  | `number (int, 0–120000)`         | `0`     | Block up to this many milliseconds for the run to finish. Ignored in list mode. A timed-out wait is not an error                                         |
+| `tail`    | `number (int, 0–65536)`          | `8192`  | Bytes of `progress.log` to include for a live run                                                                                                        |
 
 ### Result
 
@@ -553,7 +563,7 @@ List, otherwise: `Background runs: showing N of M`, an optional `Partial listing
 line, then one row per run (`<runId>  <state>  <tool>  <elapsed>  <summary>`). A completed fragment
 is labelled `completed (cut off: <stopReason>)`, not as a clean finish.
 
-Single run, unknown id:
+Single run, unknown id (a well-formed id the store does not have):
 
 `No background run with id "<runId>" was found in <stateDir>.`
 
@@ -646,9 +656,9 @@ spawned. Stopping an already-finished run is not an error.
 
 ### Parameters
 
-| Parameter | Type     | Default | Description                                                                |
-| --------- | -------- | ------- | -------------------------------------------------------------------------- |
-| `runId`   | `string` | —       | The `runId` returned by a background `grok`, `review`, or `websearch` call |
+| Parameter | Type                             | Default | Description                                                                                                                                   |
+| --------- | -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runId`   | `string` (`<base36 ms>-<8 hex>`) | —       | The `runId` returned by a background `grok`, `review`, or `websearch` call. A value that is not this shape is `invalid-arguments`, not a miss |
 
 ### Result
 
@@ -733,7 +743,7 @@ binary, permission ceiling, `grok version`, `grok models`, and run defaults.
 
 ### Parameters
 
-This tool takes no arguments.
+This tool takes no arguments. An extra key is `invalid-arguments`.
 
 ### Result
 
@@ -785,7 +795,7 @@ Never. A failed probe is `ok: false` plus `versionProblem` / `authProblem`.
 
 ### Parameters
 
-This tool takes no arguments.
+This tool takes no arguments. An extra key is `invalid-arguments`.
 
 ### Result
 

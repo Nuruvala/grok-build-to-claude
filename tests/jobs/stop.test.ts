@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadConfig } from '../../src/config.js';
 import type { Config } from '../../src/config.js';
+import { InvalidArgumentsError } from '../../src/errors.js';
 import { processAlive } from '../../src/jobs/kill.js';
 import { isTerminal, type RunRecord } from '../../src/jobs/record.js';
 import {
@@ -27,6 +28,7 @@ import { runJob } from '../../src/jobs/worker.js';
 import { grokTool } from '../../src/tools/handlers/grok.js';
 import { statusTool } from '../../src/tools/handlers/status.js';
 import { LATE_RESULT_WAIT_MS, stopTool } from '../../src/tools/handlers/stop.js';
+import { invokeTool } from '../../src/tools/registry.js';
 import type { ToolContext, ToolResult } from '../../src/types.js';
 
 interface SessionsStore {
@@ -199,17 +201,32 @@ async function claimPresent(stateDir: string, runId: string): Promise<boolean> {
 }
 
 describe('stop unknown and already-terminal', () => {
+  it('rejects a traversing runId as invalid-arguments, not as a miss after a read', async () => {
+    const stateDir = await makeTmp();
+    const binary = await installFake();
+    await assert.rejects(
+      () =>
+        invokeTool('stop', { runId: '../../../../etc' }, ctxFor(isolatedConfig(stateDir, binary))),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidArgumentsError);
+        assert.match(error.message, /runId/);
+        assert.doesNotMatch(error.message, /was found/);
+        return true;
+      },
+    );
+  });
+
   it('reports found: false and isError: false for an unknown id', async () => {
     const stateDir = await makeTmp();
     const binary = await installFake();
     const result = await stopTool.handler(
-      { runId: 'no-such-run' },
+      { runId: '00000000-00000000' },
       ctxFor(isolatedConfig(stateDir, binary)),
     );
     assert.notEqual(result.isError, true);
     assert.equal(metaOf(result)['found'], false);
     assert.equal(metaOf(result)['stateDir'], stateDir);
-    assert.match(textOf(result), /no-such-run/);
+    assert.match(textOf(result), /00000000-00000000/);
   });
 
   it('sends no signals when the record is already terminal, even if its pid is alive', async () => {
@@ -221,7 +238,7 @@ describe('stop unknown and already-terminal', () => {
     const sleeperPid = sleeper.pid;
     assert.ok(typeof sleeperPid === 'number');
     trackPid(sleeperPid);
-    await seedTerminal(stateDir, 'stp00001-alreadyx', {
+    await seedTerminal(stateDir, 'stp00001-a1aeadf0', {
       state: 'completed',
       endedAt: '2026-08-17T12:00:00.000Z',
       workerPid: sleeperPid,
@@ -229,7 +246,7 @@ describe('stop unknown and already-terminal', () => {
     });
 
     const result = await stopTool.handler(
-      { runId: 'stp00001-alreadyx' },
+      { runId: 'stp00001-a1aeadf0' },
       ctxFor(isolatedConfig(stateDir, binary)),
     );
     assert.notEqual(result.isError, true);
@@ -243,7 +260,7 @@ describe('stop unknown and already-terminal', () => {
   it('reports a still-running lost claim as another process finalizing, not as a completed stop', async () => {
     const stateDir = await makeTmp();
     const binary = await installFake();
-    const created = await seedRun(stateDir, 'stp00002-lostclm');
+    const created = await seedRun(stateDir, 'stp00002-1057c1d0');
     await patchRun(stateDir, created.runId, { state: 'running', workerPid: process.pid });
     const claim = await claimTerminal(stateDir, created.runId, 'worker');
     assert.equal(claim.kind, 'claimed');
@@ -273,7 +290,7 @@ describe('stop unknown and already-terminal', () => {
     const sleeperPid = sleeper.pid;
     assert.ok(typeof sleeperPid === 'number');
     trackPid(sleeperPid);
-    await seedTerminal(stateDir, 'stp00012-prevkill', {
+    await seedTerminal(stateDir, 'stp00012-aae00111', {
       state: 'cancelled',
       endedAt: '2026-08-17T12:00:00.000Z',
       workerPid: sleeperPid,
@@ -281,7 +298,7 @@ describe('stop unknown and already-terminal', () => {
     });
 
     const result = await stopTool.handler(
-      { runId: 'stp00012-prevkill' },
+      { runId: 'stp00012-aae00111' },
       ctxFor(isolatedConfig(stateDir, binary)),
     );
     assert.notEqual(result.isError, true);
@@ -305,7 +322,7 @@ describe('stop during boot', () => {
     async () => {
       const stateDir = await makeTmp();
       const binary = await installFake();
-      const created = await seedRun(stateDir, 'stp00010-bootpid');
+      const created = await seedRun(stateDir, 'stp00010-b00701d0');
       const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
         detached: true,
         stdio: 'ignore',
@@ -344,7 +361,7 @@ describe('stop that cannot kill', () => {
   it('does not write a terminal record, releases the claim, and returns isError so a later claimant can finish', async () => {
     const stateDir = await makeTmp();
     const binary = await installFake();
-    const created = await seedRun(stateDir, 'stp00011-nokillx');
+    const created = await seedRun(stateDir, 'stp00011-b0b01110');
 
     const result = await stopTool.handler(
       { runId: created.runId },
@@ -370,7 +387,7 @@ describe('late-result wait', () => {
   it('does not sit out the full late-result window when the worker is already gone', async () => {
     const stateDir = await makeTmp();
     const binary = await installFake();
-    const created = await seedRun(stateDir, 'stp00013-fastgone');
+    const created = await seedRun(stateDir, 'stp00013-fa5700e0');
     await patchRun(stateDir, created.runId, { state: 'running', workerPid: 999_999 });
 
     const began = Date.now();
@@ -391,7 +408,7 @@ describe('late-result wait', () => {
 describe('exactly one terminal state under a race', () => {
   it('gives exactly one claimed outcome when stop and the worker claim concurrently, and the record matches the claimant', async () => {
     const stateDir = await makeTmp();
-    const created = await seedRun(stateDir, 'stp00003-claimrx');
+    const created = await seedRun(stateDir, 'stp00003-c1a1d000');
 
     const [stopClaim, workerClaim] = await Promise.all([
       claimTerminal(stateDir, created.runId, 'stop'),
@@ -460,7 +477,7 @@ describe('late-result preservation', () => {
     const config = isolatedConfig(stateDir, binary);
     const created = await createRun({
       stateDir,
-      runId: 'stp00004-latexxx',
+      runId: 'stp00004-1a7e0000',
       tool: 'grok',
       summary: 'late',
       cwd: process.cwd(),
@@ -631,7 +648,7 @@ describe('worker writes progress.json, not record.json', () => {
     const config = isolatedConfig(stateDir, binary);
     const created = await createRun({
       stateDir,
-      runId: 'stp00005-progxxx',
+      runId: 'stp00005-aa090000',
       tool: 'grok',
       summary: 'progress sidecar',
       cwd: process.cwd(),
@@ -680,7 +697,7 @@ describe('session recovery from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(sessionId, '/tmp', createdAt),
       });
-      const created = await seedRun(stateDir, 'stp00020-onestore');
+      const created = await seedRun(stateDir, 'stp00020-0be570ae');
       await patchRun(stateDir, created.runId, {
         state: 'running',
         workerPid: 999_999,
@@ -726,7 +743,7 @@ describe('session recovery from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(second, '/tmp', new Date(now - 8_000).toISOString()),
       });
-      const created = await seedRun(stateDir, 'stp00021-twostore');
+      const created = await seedRun(stateDir, 'stp00021-7e0570ae');
       await patchRun(stateDir, created.runId, {
         state: 'running',
         workerPid: 999_999,
@@ -760,7 +777,7 @@ describe('session recovery from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(outsider, '/tmp', new Date(now - 60_000).toISOString()),
       });
-      const created = await seedRun(stateDir, 'stp00022-zerostor');
+      const created = await seedRun(stateDir, 'stp00022-2ea0570a');
       await patchRun(stateDir, created.runId, {
         state: 'running',
         workerPid: 999_999,
@@ -794,7 +811,7 @@ describe('session recovery from the store', () => {
         cwd: '/tmp',
         summary: sessionSummary(fromStore, '/tmp', new Date(now - 10_000).toISOString()),
       });
-      const created = await seedRun(stateDir, 'stp00023-endwins');
+      const created = await seedRun(stateDir, 'stp00023-ebd001b5');
       await patchRun(stateDir, created.runId, {
         state: 'running',
         workerPid: 999_999,
@@ -824,7 +841,7 @@ describe('session recovery from the store', () => {
     const binary = await installFake();
     const grokHome = await makeTmp();
     await writeFile(path.join(grokHome, 'sessions'), 'not a directory');
-    const created = await seedRun(stateDir, 'stp00024-badstore');
+    const created = await seedRun(stateDir, 'stp00024-bad570ae');
     await patchRun(stateDir, created.runId, {
       state: 'running',
       workerPid: 999_999,

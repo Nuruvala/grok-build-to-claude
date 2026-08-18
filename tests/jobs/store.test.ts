@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
-import { InvalidArgumentsError, JobStoreError } from '../../src/errors.js';
+import { InvalidArgumentsError, InvalidRunIdError, JobStoreError } from '../../src/errors.js';
+import { newRunId } from '../../src/jobs/record.js';
 import {
   claimTerminal,
   createLogAppender,
   createRun,
   finalizeRun,
   INPUT_MAX_BYTES,
+  listRunIds,
   listRuns,
   patchRun,
   readLateResult,
@@ -81,7 +83,7 @@ describe('createRun / readRun', () => {
       () =>
         createRun({
           stateDir,
-          runId: 'aaa00009-toolarge',
+          runId: 'aaa00009-7001a49e',
           tool: 'grok',
           summary: 'too big',
           cwd: '/tmp/work',
@@ -103,7 +105,7 @@ describe('createRun / readRun', () => {
 describe('patchRun', () => {
   it('returns null when a terminal.claim exists, even if the record is still non-terminal', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'aaa00010-claimref');
+    const created = await seed(stateDir, 'aaa00010-c1a1d0ef');
     const claimed = await claimTerminal(stateDir, created.runId, 'stop');
     assert.equal(claimed.kind, 'claimed');
     const filePath = path.join(runDir(stateDir, created.runId), 'record.json');
@@ -176,7 +178,7 @@ describe('claimTerminal', () => {
 describe('finalizeRun', () => {
   it('writes a terminal record on a successful claim', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'aaa00006-finalokx');
+    const created = await seed(stateDir, 'aaa00006-f1ba10c0');
     const outcome = await finalizeRun(stateDir, created.runId, 'worker', {
       state: 'completed',
       endedAt: '2026-08-17T12:00:00.000Z',
@@ -192,7 +194,7 @@ describe('finalizeRun', () => {
 
   it('returns lost when the claim is already taken', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'aaa00007-finallost');
+    const created = await seed(stateDir, 'aaa00007-f1ba1057');
     const first = await finalizeRun(stateDir, created.runId, 'worker', {
       state: 'completed',
       endedAt: '2026-08-17T12:00:00.000Z',
@@ -209,7 +211,7 @@ describe('finalizeRun', () => {
 
   it('releases the claim when the terminal write cannot land, so the next claimant can recover', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'aaa00008-releasex');
+    const created = await seed(stateDir, 'aaa00008-ae1ea5e0');
     await rm(path.join(runDir(stateDir, created.runId), 'record.json'));
 
     await assert.rejects(() =>
@@ -225,35 +227,66 @@ describe('finalizeRun', () => {
   });
 });
 
+describe('runDir', () => {
+  it('throws InvalidRunIdError for a traversing id instead of joining it onto the state directory', () => {
+    assert.throws(
+      () => runDir('/tmp/x/state', '../../../../etc'),
+      (error: unknown) => {
+        assert.ok(error instanceof InvalidRunIdError);
+        assert.equal(error.kind, 'invalid-arguments');
+        assert.equal(error.details?.['runId'], '../../../../etc');
+        return true;
+      },
+    );
+  });
+});
+
 describe('listRuns', () => {
+  it('ignores a directory whose name is not a runId, so a foreign folder is neither listed nor counted', async () => {
+    const stateDir = await makeState();
+    const real = await seed(stateDir, newRunId(Date.now()));
+    await mkdir(path.join(stateDir, 'runs', 'not-a-run-id'));
+
+    const listed = await listRuns(stateDir, 20);
+    assert.deepEqual(
+      listed.records.map((row) => row.runId),
+      [real.runId],
+    );
+    assert.equal(listed.scanned, 1);
+    assert.equal(listed.unreadable, 0);
+
+    const ids = await listRunIds(stateDir);
+    assert.deepEqual(ids, [real.runId]);
+  });
+
   it('counts a non-json record and one over RECORD_MAX_BYTES as unreadable without failing', async () => {
     const stateDir = await makeState();
-    await seed(stateDir, 'bbb00001-goodgood');
-    await seed(stateDir, 'bbb00002-notjsonx');
-    await writeFile(path.join(runDir(stateDir, 'bbb00002-notjsonx'), 'record.json'), 'not json');
-    await seed(stateDir, 'bbb00003-toolarge');
+    await seed(stateDir, 'bbb00001-900d900d');
+    await seed(stateDir, 'bbb00002-b07f50b0');
+    await writeFile(path.join(runDir(stateDir, 'bbb00002-b07f50b0'), 'record.json'), 'not json');
+    await seed(stateDir, 'bbb00003-7001a49e');
     await writeFile(
-      path.join(runDir(stateDir, 'bbb00003-toolarge'), 'record.json'),
+      path.join(runDir(stateDir, 'bbb00003-7001a49e'), 'record.json'),
       `${'x'.repeat(RECORD_MAX_BYTES + 8)}\n`,
     );
 
     const listed = await listRuns(stateDir, 20);
     assert.equal(listed.records.length, 1);
-    assert.equal(listed.records[0]?.runId, 'bbb00001-goodgood');
+    assert.equal(listed.records[0]?.runId, 'bbb00001-900d900d');
     assert.equal(listed.unreadable, 2);
   });
 
   it('returns newest first by id ordering alone, honours limit, and sets truncated past a lowered scan cap', async () => {
     const stateDir = await makeState();
-    await seed(stateDir, 'ccc00001-oldestxx');
-    await seed(stateDir, 'ccc00002-middlexx');
-    await seed(stateDir, 'ccc00003-newestxx');
-    await seed(stateDir, 'ccc00004-newerxxx');
+    await seed(stateDir, 'ccc00001-01de5700');
+    await seed(stateDir, 'ccc00002-d1dd1e00');
+    await seed(stateDir, 'ccc00003-beee5700');
+    await seed(stateDir, 'ccc00004-beeae000');
 
     const limited = await listRuns(stateDir, 2);
     assert.deepEqual(
       limited.records.map((row) => row.runId),
-      ['ccc00004-newerxxx', 'ccc00003-newestxx'],
+      ['ccc00004-beeae000', 'ccc00003-beee5700'],
     );
 
     const capped = await listRuns(stateDir, 20, { scanCap: 2 });
@@ -262,7 +295,7 @@ describe('listRuns', () => {
     assert.equal(capped.records.length, 2);
     assert.deepEqual(
       capped.records.map((row) => row.runId),
-      ['ccc00004-newerxxx', 'ccc00003-newestxx'],
+      ['ccc00004-beeae000', 'ccc00003-beee5700'],
     );
   });
 
@@ -279,7 +312,7 @@ describe('listRuns', () => {
     async () => {
       const stateDir = await makeState();
       const root = path.join(stateDir, 'runs');
-      await seed(stateDir, 'ddd00001-blockedx');
+      await seed(stateDir, 'ddd00001-b10c0ed0');
       await chmod(root, 0o000);
       try {
         await assert.rejects(
@@ -300,7 +333,7 @@ describe('listRuns', () => {
 describe('progress.json', () => {
   it('round-trips a sidecar without touching record.json progress fields', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'prg00001-sidecarx');
+    const created = await seed(stateDir, 'prg00001-51deca00');
     await writeProgress(stateDir, created.runId, {
       progressCount: 4,
       lastProgress: '#4 list_dir .',
@@ -320,7 +353,7 @@ describe('progress.json', () => {
 
   it('returns null when the sidecar is missing or unparseable', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'prg00002-missingx');
+    const created = await seed(stateDir, 'prg00002-d1551b90');
     assert.equal(await readProgress(stateDir, created.runId), null);
     await writeFile(path.join(runDir(stateDir, created.runId), 'progress.json'), 'not json');
     assert.equal(await readProgress(stateDir, created.runId), null);
@@ -330,7 +363,7 @@ describe('progress.json', () => {
 describe('worker.pid', () => {
   it('round-trips a pid and returns null when the sidecar is missing or unparseable', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'pid00001-sidecarx');
+    const created = await seed(stateDir, 'pid00001-51deca00');
     assert.equal(await readWorkerPid(stateDir, created.runId), null);
     await writeWorkerPid(stateDir, created.runId, 4242);
     assert.equal(await readWorkerPid(stateDir, created.runId), 4242);
@@ -342,7 +375,7 @@ describe('worker.pid', () => {
 describe('late-result.json', () => {
   it('round-trips a stored result and returns null when the file is absent', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'lte00001-resultx');
+    const created = await seed(stateDir, 'lte00001-ae5e1700');
     assert.equal(await readLateResult(stateDir, created.runId), null);
     await writeLateResult(stateDir, created.runId, {
       text: 'partial',
@@ -360,13 +393,13 @@ describe('late-result.json', () => {
 describe('private file modes', { skip: process.platform === 'win32' }, () => {
   it('creates a run directory as 0700 so other local users cannot read the prompt', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'mod00001-rundirxx');
+    const created = await seed(stateDir, 'mod00001-adb01a00');
     assert.equal(await fileMode(runDir(stateDir, created.runId)), 0o700);
   });
 
   it('writes record.json and input.json as 0600', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'mod00002-jsonxxxx');
+    const created = await seed(stateDir, 'mod00002-f50b0000');
     const dir = runDir(stateDir, created.runId);
     assert.equal(await fileMode(path.join(dir, 'record.json')), 0o600);
     assert.equal(await fileMode(path.join(dir, 'input.json')), 0o600);
@@ -374,7 +407,7 @@ describe('private file modes', { skip: process.platform === 'win32' }, () => {
 
   it('writes the progress append sidecar as 0600 once written', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'mod00003-appendxx');
+    const created = await seed(stateDir, 'mod00003-a00e0d00');
     const filePath = path.join(runDir(stateDir, created.runId), 'progress.log');
     const appender = createLogAppender(filePath, 1024);
     appender.write('step\n');
@@ -384,7 +417,7 @@ describe('private file modes', { skip: process.platform === 'win32' }, () => {
 
   it('writes the terminal claim file as 0600', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'mod00004-claimxxx');
+    const created = await seed(stateDir, 'mod00004-c1a1d000');
     const claimed = await claimTerminal(stateDir, created.runId, 'test');
     assert.equal(claimed.kind, 'claimed');
     assert.equal(
@@ -397,7 +430,7 @@ describe('private file modes', { skip: process.platform === 'win32' }, () => {
 describe('atomic writes', () => {
   it('leaves no *.tmp file after a successful write', async () => {
     const stateDir = await makeState();
-    const created = await seed(stateDir, 'eee00001-atomictx');
+    const created = await seed(stateDir, 'eee00001-a70d1c70');
     await patchRun(stateDir, created.runId, { lastProgress: 'step' });
     const names = await readdir(runDir(stateDir, created.runId));
     assert.equal(

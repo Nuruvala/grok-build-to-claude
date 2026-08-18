@@ -148,6 +148,28 @@ export class SessionsStoreError extends GrokMcpError {
 }
 
 /**
+ * A `runId` that is not the shape this server issues. Caller-facing
+ * validation is `RunIdSchema` on `status` / `stop`; this is the backstop
+ * so a future entry point cannot reintroduce path traversal by reaching
+ * `runDir` with a raw argument.
+ */
+export class InvalidRunIdError extends GrokMcpError {
+  constructor(runId: string) {
+    super(
+      'invalid-arguments',
+      'Invalid runId: a background-run id is <base36 ms>-<8 hex>, and this value is not one.',
+      {
+        remedy:
+          'Pass a runId from a background grok, review, or websearch result. ' +
+          'Do not construct one by hand or from a file path.',
+        details: { runId },
+      },
+    );
+    this.name = 'InvalidRunIdError';
+  }
+}
+
+/**
  * The background-run store root could not be read. ENOENT is not this error —
  * that is "no runs yet". Anything else (EACCES, ENOTDIR) is, and the remedy
  * names GROK_MCP_STATE_DIR so the caller can fix the path rather than retry.
