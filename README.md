@@ -1,7 +1,7 @@
 # grok-build-mcp-server
 
 [![npm](https://img.shields.io/npm/v/grok-build-mcp-server?style=flat-square)](https://www.npmjs.com/package/grok-build-mcp-server)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.nuruvala%2Fgrok--build--mcp--server-6E56CF?style=flat-square)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.nuruvala/grok-build-mcp-server)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.Nuruvala%2Fgrok--build--mcp--server-6E56CF?style=flat-square)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Nuruvala/grok-build-mcp-server)
 [![CI](https://img.shields.io/github/actions/workflow/status/Nuruvala/grok-build-to-claude/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Nuruvala/grok-build-to-claude/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/node/v/grok-build-mcp-server?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -20,7 +20,7 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: 0.2.1.** The tool surface is complete. The server runs real headless Grok agents in the
+> **Status: 0.2.2.** The tool surface is complete. The server runs real headless Grok agents in the
 > foreground or detached in the background, streams progress while they run, stops a run on request,
 > reviews git diffs, researches questions on the web, lists the sessions those runs created, and
 > reports session, usage, and cost. See [CHANGELOG.md](CHANGELOG.md) for what shipped and
@@ -91,7 +91,7 @@ VS Code and Cursor accept the install badges at the top of this page, which carr
 configuration.
 
 Clients that install from the [MCP Registry](https://registry.modelcontextprotocol.io) know this
-server as `io.github.nuruvala/grok-build-mcp-server`. The registry entry is published from the same
+server as `io.github.Nuruvala/grok-build-mcp-server`. The registry entry is published from the same
 tag as the npm release and points at the same package.
 
 ### If `npx` cannot find the server

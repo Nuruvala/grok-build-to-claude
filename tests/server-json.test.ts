@@ -63,8 +63,12 @@ describe('server.json satisfies the registry schema rules', () => {
   });
 
   it('claims a namespace the release workflow can authenticate', () => {
-    // `mcp-publisher login github-oidc` grants io.github.<owner>/* and nothing else.
-    assert.match(server['name'] as string, /^io\.github\.nuruvala\//);
+    // `mcp-publisher login github-oidc` grants io.github.<owner>/* and nothing else,
+    // with the owner's case preserved. The registry compares namespaces exactly and
+    // answers a mismatch with a 403 at publish time — io.github.nuruvala cost a
+    // release to learn, because the npm tarball carries mcpName and cannot be
+    // corrected after the fact.
+    assert.match(server['name'] as string, /^io\.github\.Nuruvala\//);
   });
 
   it('keeps title and description inside the schema length caps', () => {

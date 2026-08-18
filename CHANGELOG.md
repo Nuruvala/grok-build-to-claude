@@ -10,18 +10,35 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.2] — 2026-08-18
+
+Fixes the registry name 0.2.1 shipped. The namespace `mcp-publisher login github-oidc` grants
+preserves the GitHub login's case — `io.github.Nuruvala`, not `io.github.nuruvala` — and the
+registry compares it exactly, answering the mismatch with a 403 at publish time. Because the
+`mcpName` that proves ownership travels in the npm tarball, 0.2.1 cannot be corrected in place; the
+name has to be right in a release before a registry entry can claim it.
+
+### Fixed
+
+- The registry name is `io.github.Nuruvala/grok-build-mcp-server`. The release workflow now checks
+  the namespace against `github.repository_owner` before anything is published, so the case is
+  caught by a guard rather than by a 403 after npm has already accepted the version.
+- A failed registry publish no longer withholds the GitHub release. The two were chained, so 0.2.1
+  published to npm and then had no release page; the tag is a fact about this repository and does
+  not depend on a third-party service accepting an entry.
+
 ## [0.2.1] — 2026-08-18
 
 No runtime change. The server behaves exactly as 0.2.0 did; the published tarball differs only by
 the `mcpName` field in `package.json`, which the MCP Registry reads to verify that whoever claims
-`io.github.nuruvala/grok-build-mcp-server` also owns the npm package. Because that check reads the
+`io.github.Nuruvala/grok-build-mcp-server` also owns the npm package. Because that check reads the
 tarball rather than the repository, 0.2.0 can never be registered — the field has to ship in a
 release before the registry entry can name it. This is that release.
 
 ### Added
 
 - An [MCP Registry](https://registry.modelcontextprotocol.io) entry. `server.json` declares the
-  server as `io.github.nuruvala/grok-build-mcp-server`, and the release workflow publishes it after
+  server as `io.github.Nuruvala/grok-build-mcp-server`, and the release workflow publishes it after
   npm on every `vX.Y.Z` tag. Ownership is verified by the `mcpName` field now in `package.json`,
   which the registry reads out of the published tarball — so the entry can only name a version whose
   tarball carries it.

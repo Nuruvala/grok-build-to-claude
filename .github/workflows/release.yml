@@ -108,7 +108,13 @@ jobs:
               fail(`server.json npm identifier ${npmPkg?.identifier} does not match package.json name ${pkg.name}`);
             if (pkg.mcpName !== srv.name)
               fail(`package.json mcpName ${pkg.mcpName} does not match server.json name ${srv.name} — the registry reads this to verify npm ownership`);
+            const expectedNamespace = `io.github.${process.env.REPO_OWNER}`;
+            const namespace = srv.name.split("/")[0];
+            if (namespace !== expectedNamespace)
+              fail(`server.json namespace ${namespace} is not ${expectedNamespace} — github-oidc grants that namespace exactly, case included, and the registry rejects any other with a 403`);
           '
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
 
       # `npx -y grok-build-mcp-server` is the documented install, so prove the packed
       # tarball actually starts before it is published rather than after. The path is
@@ -138,7 +144,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       # `mcp-publisher login github-oidc` exchanges this for a token scoped to the
-      # io.github.nuruvala/* namespace. No stored credential, same as the npm publish.
+      # io.github.Nuruvala/* namespace. No stored credential, same as the npm publish.
+      #
+      # The namespace preserves the GitHub login's case and the registry compares it
+      # exactly, so `io.github.nuruvala` is a different namespace that this token does
+      # not grant. The guard in the publish job checks the case before anything ships.
       id-token: write
       contents: read
 
@@ -165,7 +175,7 @@ jobs:
 
   github-release:
     name: GitHub release
-    needs: [publish, mcp-registry]
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
