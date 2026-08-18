@@ -20,7 +20,7 @@ It is a thin process wrapper. It does not reimplement agent logic and does not t
 directly — all the intelligence stays in the `grok` CLI. What this server adds is faithful argument
 construction, robust process supervision, and clean MCP-shaped output.
 
-> **Status: 0.2.0.** The tool surface is complete. The server runs real headless Grok agents in the
+> **Status: 0.2.1.** The tool surface is complete. The server runs real headless Grok agents in the
 > foreground or detached in the background, streams progress while they run, stops a run on request,
 > reviews git diffs, researches questions on the web, lists the sessions those runs created, and
 > reports session, usage, and cost. See [CHANGELOG.md](CHANGELOG.md) for what shipped and

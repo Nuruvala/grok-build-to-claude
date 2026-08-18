@@ -10,6 +10,14 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.1] — 2026-08-18
+
+No runtime change. The server behaves exactly as 0.2.0 did; the published tarball differs only by
+the `mcpName` field in `package.json`, which the MCP Registry reads to verify that whoever claims
+`io.github.nuruvala/grok-build-mcp-server` also owns the npm package. Because that check reads the
+tarball rather than the repository, 0.2.0 can never be registered — the field has to ship in a
+release before the registry entry can name it. This is that release.
+
 ### Added
 
 - An [MCP Registry](https://registry.modelcontextprotocol.io) entry. `server.json` declares the

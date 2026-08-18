@@ -1,6 +1,6 @@
 {
   "name": "grok-build-mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "mcpName": "io.github.nuruvala/grok-build-mcp-server",
   "description": "MCP stdio server exposing the Grok Build CLI as tools for Claude Code, Cursor, and any other MCP client.",
   "keywords": [
