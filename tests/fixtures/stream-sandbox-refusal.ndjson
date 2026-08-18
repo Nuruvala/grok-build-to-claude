@@ -1,0 +1,4 @@
+{"type":"text","data":"Writing the report from the findings already in hand."}
+{"type":"tool_call","toolCallId":"call-9","title":"write","kind":"write","status":"pending","toolName":"write","rawInput":{"file_path":"/outside/the/workspace/report.md","content":"# a report the caller never sees"},"content":[],"locations":[{"path":"/outside/the/workspace/report.md"}]}
+{"type":"tool_call_update","toolCallId":"call-9","status":"failed","content":[{"type":"content","content":{"type":"text","text":"User cancelled the execution for tool `write`"}}],"rawOutput":null,"locations":[]}
+{"type":"end","stopReason":"cancelled","sessionId":"00000000-0000-7000-8000-000000000012","requestId":"00000000-0000-4000-8000-000000000013","usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24},"num_turns":1,"total_cost_usd":0.001,"modelUsage":{"fake-model-build":{"costUSD":0.001}}}

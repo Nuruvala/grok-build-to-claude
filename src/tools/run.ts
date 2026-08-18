@@ -20,7 +20,7 @@ import {
   emptyResult,
   interpretStreamLine,
 } from '../grok/stream.js';
-import type { GrokStreamEvent, StreamOutcome } from '../grok/stream.js';
+import type { GrokStreamEvent, StreamOutcome, ToolFailure } from '../grok/stream.js';
 import { log } from '../log.js';
 import type { PermissionLevel } from '../permission.js';
 import { resumeCommand } from '../sessions/select.js';
@@ -156,7 +156,13 @@ export async function runGrok(request: GrokRunRequest, ctx: ToolContext): Promis
   // session id and the spend that produced it. `stop` is the same shape: it
   // SIGTERMs a worker whose grok child may already have written `end`.
   if (outcome.kind === 'result') {
-    return successResult(outcome.result, exec, request, ctx.config.structuredContentEnabled);
+    return successResult(
+      outcome.result,
+      exec,
+      request,
+      ctx.config.structuredContentEnabled,
+      stream?.toolFailures() ?? [],
+    );
   }
 
   if (exec.outcome === 'timeout') {
@@ -327,6 +333,7 @@ interface StreamSession {
   readonly onStdout: (chunk: string) => void;
   readonly drain: () => void;
   readonly outcome: () => StreamOutcome;
+  readonly toolFailures: () => readonly ToolFailure[];
   readonly clearTimer: () => void;
 }
 
@@ -403,6 +410,7 @@ function startStreamSession(
       emit(mapper.flush());
     },
     outcome: () => collector.outcome(),
+    toolFailures: () => collector.toolFailures(),
     clearTimer: cancelDebounce,
   };
 }
@@ -447,6 +455,7 @@ function successResult(
   exec: ExecResult,
   request: GrokRunRequest,
   structuredContentEnabled: boolean,
+  toolFailures: readonly ToolFailure[],
 ): ToolResult {
   const body = request.formatText === undefined ? result.text : request.formatText(result);
   const meta = Object.freeze({
@@ -477,7 +486,7 @@ function successResult(
     content: [
       {
         type: 'text',
-        text: formatResultText(body, exec.code, result.stopReason),
+        text: formatResultText(body, exec.code, result.stopReason, toolFailures),
         _meta: meta,
       },
     ],
@@ -540,6 +549,7 @@ function formatResultText(
   text: string,
   exitCode: number | null,
   stopReason: string | null,
+  toolFailures: readonly ToolFailure[] = [],
 ): string {
   const failed = exitCode !== 0 && exitCode !== null;
   const cutOff = stopReason !== null && stopReason !== 'end_turn';
@@ -551,7 +561,31 @@ function formatResultText(
   }
   // Exit 0 with a non-end_turn stopReason: a permission-cancelled run does
   // this. Without a note the caller sees bare narration and no fragment mark.
-  return `${text}\n\n[the run stopped early — stopReason: ${stopReason}]`;
+  return `${text}\n\n[the run stopped early — stopReason: ${stopReason}]${cutOffCause(toolFailures)}`;
+}
+
+/**
+ * The refused tool calls, named, when a cut-off run had any.
+ *
+ * A failed tool call on its own is ordinary and is not reported: a run recovers from one and
+ * finishes. A failed call in a run that then stopped early is usually the whole reason it
+ * stopped, and without this the caller sees `stopReason: cancelled` and no way to tell a
+ * refused write from a model that gave up. The commonest case is a write outside the sandbox
+ * a permission level implies, which is why the note names the path.
+ */
+function cutOffCause(toolFailures: readonly ToolFailure[]): string {
+  if (toolFailures.length === 0) return '';
+  const named = toolFailures
+    .map((failure) =>
+      failure.target === null ? failure.label : `${failure.label} ${failure.target}`,
+    )
+    .join(', ');
+  return (
+    `\n[a tool call failed first: ${named}. ` +
+    'A tool call refused by the sandbox ends the whole run this way; `write` confines writes ' +
+    "to `cwd`, and `full` does not sandbox. The refused call's own payload is not in this " +
+    'result: it is in the run record under the state dir, in the `tool_call` event.]'
+  );
 }
 
 function errorResult(

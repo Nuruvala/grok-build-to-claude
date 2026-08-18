@@ -8,6 +8,7 @@
 
 import type { GrokRunResult } from './result.js';
 import type { GrokStreamEvent } from './stream.js';
+import { firstLocation, firstPathLike } from './tool-target.js';
 
 export interface ProgressEmission {
   /** Monotonic, starting at 1. */
@@ -118,23 +119,6 @@ function formatTail(buffer: string): string {
   const collapsed = buffer.replace(/\s+/g, ' ').trim();
   if (collapsed.length <= TAIL_LIMIT) return collapsed;
   return `…${collapsed.slice(-TAIL_LIMIT)}`;
-}
-
-function firstLocation(locations: readonly string[]): string | undefined {
-  const path = locations[0];
-  return path !== undefined && path !== '' ? path : undefined;
-}
-
-function firstPathLike(rawInput: Readonly<Record<string, unknown>> | null): string | undefined {
-  if (rawInput === null) return undefined;
-  for (const value of Object.values(rawInput)) {
-    if (typeof value === 'string' && looksLikePath(value)) return value;
-  }
-  return undefined;
-}
-
-function looksLikePath(value: string): boolean {
-  return (value.includes('/') || value.includes('.')) && !/\s/.test(value);
 }
 
 function nonempty(value: string | null): string | undefined {

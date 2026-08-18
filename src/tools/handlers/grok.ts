@@ -49,7 +49,7 @@ const GrokInput = z
       .refine(isUsableCwdShape, { message: 'An absolute path is required.' })
       .optional()
       .describe(
-        'Absolute path. Working directory for the run. Passed as `--cwd`. Use the narrowest useful path.',
+        'Absolute path. Working directory for the run. Passed as `--cwd`. Use the narrowest useful path. Under `permission: "write"` this is also the sandbox root: the run cannot write outside it, and a refused write ends the whole run. Name an output path inside `cwd`, or use `full`.',
       ),
     model: z
       .string()
@@ -66,7 +66,7 @@ const GrokInput = z
         'Reasoning effort passed as `--effort`. Omit to use the server default. Values are passed through; the CLI rejects what the model does not advertise.',
       ),
     permission: PermissionLevelSchema.optional().describe(
-      'Permission level for this run: `read-only`, `write`, or `full`. Must be at or below GROK_MCP_PERMISSION_CEILING. Omit to use the server default.',
+      'Permission level for this run: `read-only` (plan mode, read-only sandbox), `write` (accepts edits, sandboxed to `cwd`), or `full` (no sandbox). Must be at or below GROK_MCP_PERMISSION_CEILING. Omit to use the server default. A tool call the sandbox refuses ends the run with `stopReason: cancelled`, so pick the level from where the run must write, not only from what it must change.',
     ),
     write: z
       .boolean()

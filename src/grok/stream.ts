@@ -7,6 +7,7 @@
  */
 
 import { readGrokResultFields } from './result.js';
+import { firstLocation, firstPathLike } from './tool-target.js';
 import type { GrokRunResult, GrokUsage } from './result.js';
 
 export type GrokStreamEvent =
@@ -37,6 +38,25 @@ export type GrokStreamEvent =
   /** A line that was not valid JSON. Never throws; the raw line is preserved for diagnostics. */
   | { readonly type: 'unparseable'; readonly line: string };
 
+/**
+ * A tool call the CLI reported as failed, named the way the progress log names it.
+ *
+ * Collected because a failure is invisible in the run's result text. The grok CLI ends a whole
+ * run with `stopReason: "cancelled"` when a tool call is refused (verified grok 1.0.4 on
+ * 2026-08-18, a `write` outside the `workspace` sandbox), and the result text then holds only
+ * whatever narration preceded the refusal. A caller reading that text sees a short answer and
+ * an exit code of 0. A failed call on its own is not fatal and is common, so the run reporter
+ * names these only when the run was also cut off.
+ */
+export interface ToolFailure {
+  /** The tool's display label, the same one the progress log uses. */
+  readonly label: string;
+  /** Where the call pointed, when the event said: a path, a URL, or null. */
+  readonly target: string | null;
+  /** The status the CLI reported, verbatim. */
+  readonly status: string;
+}
+
 export type StreamOutcome =
   | { readonly kind: 'result'; readonly result: GrokRunResult }
   /** The stream stopped before `end`. `result` holds whatever was recovered. */
@@ -55,6 +75,8 @@ export interface StreamCollector {
   readonly accept: (event: GrokStreamEvent) => void;
   /** Fold everything accepted so far. Callable at any point; does not consume state. */
   readonly outcome: () => StreamOutcome;
+  /** Tool calls the CLI reported as failed, in the order they failed. */
+  readonly toolFailures: () => readonly ToolFailure[];
 }
 
 /** Interpret one NDJSON line. Total: never throws, for any input including ''. */
@@ -152,6 +174,11 @@ export function createStreamCollector(): StreamCollector {
   let lastEnd: GrokRunResult | undefined;
   const textParts: string[] = [];
   let accepted = 0;
+  // Labels and targets arrive on `tool_call` and the verdict arrives later on
+  // `tool_call_update`, which carries neither, so the pairing has to be kept.
+  const toolLabels = new Map<string, string>();
+  const toolTargets = new Map<string, string>();
+  const failures: ToolFailure[] = [];
 
   return {
     accept: (event: GrokStreamEvent): void => {
@@ -166,9 +193,27 @@ export function createStreamCollector(): StreamCollector {
         case 'text':
           textParts.push(event.data);
           return;
+        case 'tool_call': {
+          if (event.toolCallId === null) return;
+          const label = nonemptyOr(event.title, event.toolName) ?? 'tool';
+          toolLabels.set(event.toolCallId, label);
+          const target = firstLocation(event.locations) ?? firstPathLike(event.rawInput);
+          if (target !== undefined) toolTargets.set(event.toolCallId, target);
+          return;
+        }
+        case 'tool_call_update': {
+          // `failed` is the only status the CLI has been observed to use for a refused or
+          // errored call (grok 1.0.4): the others are null, `in_progress` and `completed`.
+          // `error` is accepted too rather than assuming that list is closed.
+          if (event.status !== 'failed' && event.status !== 'error') return;
+          const id = event.toolCallId;
+          const label = (id === null ? undefined : toolLabels.get(id)) ?? 'tool';
+          const target =
+            firstLocation(event.locations) ?? (id === null ? undefined : toolTargets.get(id));
+          failures.push(Object.freeze({ label, target: target ?? null, status: event.status }));
+          return;
+        }
         case 'thought':
-        case 'tool_call':
-        case 'tool_call_update':
         case 'usage':
         case 'other':
         case 'unparseable':
@@ -212,7 +257,16 @@ export function createStreamCollector(): StreamCollector {
         reason: 'stream ended before the end event',
       });
     },
+    toolFailures: (): readonly ToolFailure[] => Object.freeze([...failures]),
   };
+}
+
+function nonemptyOr(first: string | null, second: string | null): string | undefined {
+  const label = first !== null && first !== '' ? first : second;
+  if (label === null || label === '') return undefined;
+  // The CLI's title for a backend search is literally `"Web search:"`; a trailing colon
+  // reads as a dangling label with nothing after it.
+  return label.endsWith(':') ? label.slice(0, -1) : label;
 }
 
 /** Empty result used when a stream never produced an `end`. Session id stays null. */

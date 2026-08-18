@@ -60,8 +60,13 @@ If `grok` is not on your `PATH`, set `GROK_BINARY` to its full path when you reg
 ### Claude Code
 
 ```bash
-claude mcp add grok-build -- npx -y grok-build-mcp-server
+claude mcp add grok-build -s user -- npx -y grok-build-mcp-server
 ```
+
+`-s user` registers the server for your whole account rather than for the directory you happen to be
+in. Without it the scope is that one project, which is rarely what you want for a general coding
+assistant, and the symptom is a server that is missing the next time you start Claude Code somewhere
+else.
 
 Then, in Claude Code:
 
@@ -103,7 +108,7 @@ one, and fails with `command not found`. Install it somewhere of its own and reg
 
 ```bash
 npm install --prefix ~/.local/share/grok-build-mcp grok-build-mcp-server
-claude mcp add grok-build -- ~/.local/share/grok-build-mcp/node_modules/.bin/grok-build-mcp-server
+claude mcp add grok-build -s user -- ~/.local/share/grok-build-mcp/node_modules/.bin/grok-build-mcp-server
 ```
 
 ## Permissions
@@ -120,10 +125,17 @@ call. Three levels:
 | `write`               | `acceptEdits`       | `workspace` | Edits inside the working directory |
 | `full`                | `bypassPermissions` | `off`       | Unattended full approval           |
 
+The sandbox is not advisory. Under `write` the run **cannot write outside `cwd`**, and a refused
+tool call ends the whole run: the CLI reports `stopReason: cancelled`, exits 0, and returns only
+whatever the model had said before the refusal. The server names the refused call and its path in
+that case, so a sandbox refusal is not mistaken for a model that gave up. If a run must write
+somewhere else, say a report outside the repository, either point it at a path inside `cwd` or use
+`full`.
+
 To let Grok make edits:
 
 ```bash
-claude mcp add grok-build \
+claude mcp add grok-build -s user \
   -e GROK_MCP_PERMISSION_CEILING=write \
   -e GROK_MCP_DEFAULT_PERMISSION=write \
   -- npx -y grok-build-mcp-server

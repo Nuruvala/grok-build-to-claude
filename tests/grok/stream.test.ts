@@ -411,6 +411,83 @@ describe('interpretStreamLine degradation', () => {
   });
 });
 
+describe('createStreamCollector tool failures', () => {
+  const failedWrite = [
+    {
+      type: 'tool_call',
+      toolCallId: 'call-9',
+      title: 'write',
+      toolName: 'write',
+      kind: 'write',
+      status: 'pending',
+      rawInput: { file_path: '/outside/report.md', content: 'x' },
+      locations: [{ path: '/outside/report.md' }],
+    },
+    { type: 'tool_call_update', toolCallId: 'call-9', status: 'failed', locations: [] },
+  ];
+
+  function fold(events: readonly unknown[]) {
+    const collector = createStreamCollector();
+    for (const event of events) {
+      collector.accept(interpretStreamLine(JSON.stringify(event)));
+    }
+    return collector;
+  }
+
+  it('pairs a failed update with the label and path of the call that opened it, which the update itself does not carry', () => {
+    const collector = fold(failedWrite);
+    assert.deepEqual(
+      collector.toolFailures().map((failure) => ({ ...failure })),
+      [{ label: 'write', target: '/outside/report.md', status: 'failed' }],
+    );
+  });
+
+  it('records nothing for a completed or in-flight call, so an ordinary run reports no failure', () => {
+    const collector = fold([
+      failedWrite[0],
+      { type: 'tool_call_update', toolCallId: 'call-9', status: 'in_progress', locations: [] },
+      { type: 'tool_call_update', toolCallId: 'call-9', status: 'completed', locations: [] },
+      { type: 'tool_call_update', toolCallId: 'call-9', status: null, locations: [] },
+    ]);
+    assert.deepEqual(collector.toolFailures(), []);
+  });
+
+  it('still names a failure whose call was never seen, rather than dropping it', () => {
+    const collector = fold([
+      { type: 'tool_call_update', toolCallId: 'call-unknown', status: 'failed', locations: [] },
+    ]);
+    assert.deepEqual(
+      collector.toolFailures().map((failure) => ({ ...failure })),
+      [{ label: 'tool', target: null, status: 'failed' }],
+    );
+  });
+
+  it('falls back from locations to a path-like rawInput field, the same rule the progress log uses', () => {
+    const collector = fold([
+      {
+        type: 'tool_call',
+        toolCallId: 'call-3',
+        title: null,
+        toolName: 'write',
+        kind: 'write',
+        status: 'pending',
+        rawInput: { content: 'a sentence with spaces', file_path: 'notes/report.md' },
+        locations: [],
+      },
+      { type: 'tool_call_update', toolCallId: 'call-3', status: 'error', locations: [] },
+    ]);
+    assert.deepEqual(
+      collector.toolFailures().map((failure) => ({ ...failure })),
+      [{ label: 'write', target: 'notes/report.md', status: 'error' }],
+    );
+  });
+
+  it('does not consume state: two calls return equal lists, matching outcome()', () => {
+    const collector = fold(failedWrite);
+    assert.deepEqual(collector.toolFailures(), collector.toolFailures());
+  });
+});
+
 describe('createStreamCollector folding', () => {
   it('concatenates 112 text deltas plus an end into a result whose text and metadata match the end event', () => {
     const deltas = Array.from({ length: 112 }, (_, index) => `w${String(index)} `);

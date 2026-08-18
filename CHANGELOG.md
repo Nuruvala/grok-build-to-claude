@@ -10,6 +10,32 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.3] — 2026-08-18
+
+Found by dogfooding. A `write` to a path outside `cwd` under `permission: "write"` is refused by the
+sandbox, and the grok CLI answers a refused tool call by ending the entire run:
+`stopReason: "cancelled"`, exit code 0, and a result holding only whatever narration preceded the
+refusal. The server reported that as a completed run with `isError: false`. A thirteen-minute review
+run was lost this way, and nothing in the result said which tool had failed or where it had pointed.
+
+### Fixed
+
+- A cut-off run now names the tool calls that failed and where they pointed, so a sandbox refusal is
+  distinguishable from a model that stopped on its own. The note appears only when the run was also
+  cut off: a failed tool call by itself is ordinary, and runs recover from one and finish. The
+  information was already in the progress log and in the run record; it was the result, the one
+  thing a caller always reads, that did not have it.
+- The `permission` and `cwd` tool-parameter descriptions state the sandbox each level implies and
+  what a refusal costs. The README's permission table already said `write` means "edits inside the
+  working directory"; nothing said that writing elsewhere ends the run, and the schema a model reads
+  at call time said neither.
+
+### Added
+
+- `-s user` in the README's `claude mcp add` lines, with the reason. Without it the server is
+  registered for one directory, and the symptom is a server that is missing the next time Claude
+  Code starts somewhere else.
+
 ## [0.2.2] — 2026-08-18
 
 Fixes the registry name 0.2.1 shipped. The namespace `mcp-publisher login github-oidc` grants
