@@ -289,19 +289,18 @@ turn 1), despite the docs describing it as denying rather than prompting.
 **An explicit `--deny` rule is recoverable where a permission prompt is fatal.** Same prompt, same
 `--permission-mode plan --sandbox read-only`:
 
-| Flags                                                            | Outcome                                                                                  |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| none                                                             | `stopReason: "cancelled"`, turn 1, no answer                                             |
-| `--deny 'Bash(*)'`                                               | `stopReason: "end_turn"` — _"Could not run it (denied by permission policy); FALLBACK."_ |
-| `--deny 'Bash(*)' 'Edit(*)' 'Write(*)'` (edit + shell asked for) | `end_turn` in 3 turns, file unchanged, both refusals reported and the answer finished    |
+| Flags                                                                          | Outcome                                                                                  |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| none                                                                           | `stopReason: "cancelled"`, turn 1, no answer                                             |
+| `--deny 'Bash(*)'`                                                             | `stopReason: "end_turn"` — _"Could not run it (denied by permission policy); FALLBACK."_ |
+| `--deny 'Bash(*)' --deny 'Edit(*)' --deny 'Write(*)'` (edit + shell asked for) | `end_turn` in 3 turns, file unchanged, both refusals reported and the answer finished    |
 
 So a read-only agent should be given deny rules for what it must not do, not merely a permission
 mode that will refuse it. Plan mode alone looks equivalent and is not.
 
-Two consequences for our own code, both now implemented: `review` passes
-`--deny 'Bash(*)' 'Edit(*)' 'Write(*)'`, and **no path may report a cut-off run as a finished
-result**. Exit code 0 with a non-`end_turn` stop reason is a fragment, and this is how a review that
-did nothing came back looking successful.
+Two consequences for our own code, both now implemented: `review` passes one `--deny` per rule, and
+**no path may report a cut-off run as a finished result**. Exit code 0 with a non-`end_turn` stop
+reason is a fragment, and this is how a review that did nothing came back looking successful.
 
 ### Prompt offloading is not limited to `--prompt-file`
 
@@ -316,14 +315,14 @@ model may report the prompt as truncated. Budget turns accordingly for any tool 
 
 ### Safety flags
 
-| Flag                             | Values                                                                          |
-| -------------------------------- | ------------------------------------------------------------------------------- |
-| `--permission-mode`              | `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`        |
-| `--sandbox`                      | `off` (default), `workspace`, `devbox`, `read-only`, `strict`                   |
-| `--always-approve`               | alias `--yolo`, equivalent to `--permission-mode bypassPermissions`             |
-| `--allow` / `--deny`             | repeatable `ToolPrefix(glob)` rules, e.g. `Bash(npm*)`, `Write(src/**)`         |
-| `--tools` / `--disallowed-tools` | comma-separated internal tool ids (shell is `run_terminal_command`, not `bash`) |
-| `--max-turns <N>`                | headless only                                                                   |
+| Flag                             | Values                                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `--permission-mode`              | `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`                   |
+| `--sandbox`                      | `off` (default), `workspace`, `devbox`, `read-only`, `strict`                              |
+| `--always-approve`               | alias `--yolo`, equivalent to `--permission-mode bypassPermissions`                        |
+| `--allow` / `--deny`             | one `ToolPrefix(glob)` rule per flag, repeat the flag: `--deny 'Bash(*)' --deny 'Edit(*)'` |
+| `--tools` / `--disallowed-tools` | comma-separated internal tool ids (shell is `run_terminal_command`, not `bash`)            |
+| `--max-turns <N>`                | headless only                                                                              |
 
 `--sandbox read-only` blocks child-process network on Linux (seccomp); it is a no-op on macOS. Do
 not describe it as a network guarantee in cross-platform docs.
