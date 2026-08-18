@@ -5,10 +5,14 @@ All notable changes to `grok-build-mcp-server` are recorded here. The format fol
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Releases are cut by pushing a `vX.Y.Z` tag matching `package.json`; see
-[.github/workflows/release.yml](.github/workflows/release.yml). At tag time the `Unreleased` heading
-below becomes the version heading and a fresh empty `Unreleased` takes its place.
+[.github/workflows/release.yml](.github/workflows/release.yml). At tag time the `Unreleased` section
+becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
+
+Nothing yet.
+
+## [0.1.0] — 2026-08-18
 
 Initial release. An MCP stdio server that exposes the [Grok Build](https://x.ai) CLI as tools for
 Claude Code, Cursor, VS Code, and any other MCP client.
