@@ -17,7 +17,7 @@ implementation slices to Grok Build and the results are verified at source.
 | 4   | A refused tool call ended the whole run with `stopReason: cancelled` and no indication of which call caused it | severe   | 0.2.3                                                                                                                                         |
 | 5   | `permission: "write"` could not write at all                                                                   | severe   | 0.2.4                                                                                                                                         |
 | 6   | The cut-off note attributes every refusal to a sandbox or a write outside `cwd`                                | minor    | 0.2.5                                                                                                                                         |
-| 7   | Two spawn-timing tests flake under load                                                                        | minor    | 0.2.5                                                                                                                                         |
+| 7   | Tests that treat interpreter startup as a wall-clock budget flake under load                                   | minor    | 0.2.5                                                                                                                                         |
 | 8   | A long run's output is lost when the model writes to a path outside `cwd`                                      | minor    | 0.2.5                                                                                                                                         |
 | 9   | A run can loop asserting `(file written)` in its reasoning without ever calling a write tool                   | medium   | 0.2.5                                                                                                                                         |
 | 10  | `stop` counts a zombie as a running process, so it reports a false failure                                     | moderate | 0.2.5                                                                                                                                         |
@@ -167,14 +167,33 @@ It no longer claims the CLI refused because of a sandbox or a write outside `cwd
 an unapprovable prompt look the same from here. The review and websearch cut-off leads were widened
 the same way: a set `maxTurns` is named as one possible cause, not a confirmed one.
 
-### 7. Two spawn-timing tests flake under load
+### 7. Tests that treat interpreter startup as a wall-clock budget flake under load
 
-Fixed in 0.2.5. The two tests in `execGrok always terminates` asserted `durationMs < 5000` and
-`durationMs < 10000`. The first bound is `SIGKILL_GRACE_MS` itself, so any run where SIGTERM did not
-reap before escalation (interpreter startup under load) failed while the kill had worked. They now
-assert on `outcome`. The exec test helper's default timeout was 200ms, which made every unspecified
-call a spawn-timing test; it is now a 30s backstop, and timeout-kill tests pass `timeoutMs`
-explicitly. Bytes-on-kill use abort-after-first-stdout so they do not race startup.
+Fixed in 0.2.5. The failures that first prompted this item were two tests in
+`execGrok always terminates` asserting `durationMs < 5000` and `durationMs < 10000`. The first bound
+is `SIGKILL_GRACE_MS` itself, so any run where SIGTERM did not reap before escalation (interpreter
+startup under load) failed while the kill had worked. They now assert on `outcome`. The exec test
+helper's default timeout was 200ms, which made every unspecified call a spawn-timing test; it is now
+a 30s backstop, and timeout-kill tests pass `timeoutMs` explicitly. Bytes-on-kill use
+abort-after-first-stdout so they do not race startup.
+
+That was not the whole family. Repeating the full suite under load — not the failures that first
+prompted the item — found more of the same shape, all racing node starting
+`tests/fixtures/fake-grok.mjs`:
+
+- `tests/tools/grok.test.ts` timed out at 150ms and asserted the fixture's partial stdout. Under
+  load the timer fired before the fake had written anything, so the timeout path was correct and the
+  capture assertion failed.
+- `tests/jobs/kill.test.ts` spun 200ms for the fake's SIGTERM-ignore handler to install. Signalling
+  during node startup hits the default disposition, looks like a clean terminate, and `signalsSent`
+  is `['SIGTERM']` alone.
+- `tests/grok/binary.test.ts` timed out a version probe at 150ms and then read the argv file the
+  fixture writes at module evaluation. Same race, same missing file.
+
+The fixture now writes `FAKE_GROK_READY_FILE` after the handler is installed and canned output has
+been written. Tests wait for that file instead of guessing a delay. The grok timeout test and the
+version-probe timeout test also raise their budgets: both start the clock at spawn, so there is no
+seam to wait for the file before the timer starts, and neither test measures the size of the budget.
 
 ### 8. A long run's output is lost when the model writes to a path outside `cwd`
 

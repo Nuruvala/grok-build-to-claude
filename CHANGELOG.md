@@ -10,6 +10,16 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+## [0.2.5] — 2026-08-20
+
+Observability, found by driving the server rather than by testing it. Every item here came from one
+class of failure: a caller polling `status` could see what a run was saying and not what it was
+doing, so a run that talked for seventeen minutes without calling a write tool looked the same as a
+run doing the work. The tally and the repeat advisory are both cheap signals computed from data the
+server already held. The zombie fix is the same shape one layer down: `stop` reported a failure for
+a tree it had successfully killed, because a process that has exited and not been reaped still
+answers a signal probe.
+
 ### Added
 
 - `status` reports a per-run tool-call tally: the total, a breakdown by tool label, and how long ago
@@ -37,6 +47,10 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 - Two spawn-timing tests asserted wall-clock duration against `SIGKILL_GRACE_MS` and a drain
   backstop, so they failed under load. They now assert on outcome. The exec helper's default timeout
   is a backstop, not a 200ms measurement of interpreter startup.
+- Three more tests in the same family raced node's startup rather than measuring what they were
+  about, found by running the whole suite repeatedly under load rather than by the failures that
+  first prompted the item. The fixture announces readiness through a file and those tests wait for
+  it, so none of them guesses how long an interpreter takes to reach module evaluation.
 
 ## [0.2.4] — 2026-08-18
 

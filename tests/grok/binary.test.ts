@@ -3,6 +3,7 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { probeAuth, probeVersion } from '../../src/grok/binary.js';
@@ -48,6 +49,19 @@ await import(${JSON.stringify(pathToFileURL(FAKE_GROK).href)});
 
 async function readArgv(argvFile: string): Promise<unknown> {
   return JSON.parse(await readFile(argvFile, 'utf8')) as unknown;
+}
+
+async function waitForReadyFile(filePath: string, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await access(filePath);
+      return;
+    } catch {
+      await delay(20);
+    }
+  }
+  assert.fail(`ready file never appeared at ${filePath}`);
 }
 
 async function argvWriteCount(argvFile: string): Promise<number> {
@@ -122,12 +136,25 @@ await import(${JSON.stringify(pathToFileURL(FAKE_GROK).href)});
   });
 
   it('does not retry a timeout, because a hung binary is not a missing --version flag', async () => {
+    // This test measures that a timeout is not retried as a missing --version
+    // flag, not the size of the probe budget. 150 ms raced node starting the
+    // fake: the argv file is written at module evaluation, and under load the
+    // timer can fire before that write, so readArgv fails while the no-retry
+    // path itself had worked. probeVersion starts the clock at spawn, so there
+    // is no seam to wait for FAKE_GROK_READY_FILE before the timer starts —
+    // raising the budget past startup is the available fix, matching the grok
+    // timeout test. Waiting for the file still fails loudly if the fake never
+    // records argv.
+    const readyFile = path.join(await makeTmp(), 'ready');
     const { binary, argvFile } = await installFake({
       FAKE_GROK_STDOUT: 'partial',
       FAKE_GROK_SLEEP_MS: '10000',
+      FAKE_GROK_READY_FILE: readyFile,
     });
 
-    const probe = await probeVersion(binary, 150);
+    const pending = probeVersion(binary, 2000);
+    await waitForReadyFile(readyFile, 10_000);
+    const probe = await pending;
 
     assert.equal(probe.ok, false);
     assert.match(probe.problem ?? '', /timed out/);

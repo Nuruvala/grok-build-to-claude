@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Scriptable stand-in for the `grok` CLI. Driven entirely by FAKE_GROK_* environment
- * variables so a test can script stdout, stderr, exit code, sleep, and process-tree
- * behaviour without writing files (except the optional argv dump).
+ * variables so a test can script stdout, stderr, exit code, sleep, process-tree
+ * behaviour, and a readiness file (FAKE_GROK_READY_FILE) without writing anything
+ * else (except the optional argv dump).
  *
  * Writes to fds 1/2 via fs write helpers so this fixture is not itself a
  * console.log / process.stdout.write source — those are banned in this repo
@@ -64,6 +65,16 @@ if (cannedStdout) {
 const cannedStderr = process.env['FAKE_GROK_STDERR'];
 if (cannedStderr) {
   writeSync(2, cannedStderr);
+}
+
+// Tests that must not race interpreter startup poll this file. Written after
+// the SIGTERM handler is installed (top of this file) and canned stdout/stderr
+// have been flushed, so a waiter can signal or assert partial output without
+// guessing how long node took to evaluate us. stdio may be 'ignore', so a
+// file, not a stderr line, is the announcement.
+const readyFile = process.env['FAKE_GROK_READY_FILE'];
+if (readyFile) {
+  writeFileSync(readyFile, 'ready\n');
 }
 
 // Must match the literal in tests/grok/exec.test.ts. Split after the first byte

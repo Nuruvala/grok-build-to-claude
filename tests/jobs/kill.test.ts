@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -60,6 +60,15 @@ function assertDead(pid: number): void {
   // Requiring ESRCH here is the old check, and it is what made stop report
   // `survived` for a tree that had already exited.
   assert.equal(processAlive(pid), false);
+}
+
+async function waitForReadyFile(filePath: string, pid: number, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (!existsSync(filePath)) {
+    assert.equal(processAlive(pid), true, 'child died before announcing ready');
+    assert.ok(Date.now() - started < timeoutMs, `ready file never appeared at ${filePath}`);
+    await delay(20);
+  }
 }
 
 async function waitForSpawn(child: ReturnType<typeof spawn>): Promise<number> {
@@ -164,7 +173,7 @@ setTimeout(() => {}, 3600000);
     'escalates to SIGKILL when the child ignores SIGTERM',
     { skip: process.platform === 'win32', timeout: 15_000 },
     async () => {
-      await makeTmp();
+      const readyFile = path.join(await makeTmp(), 'ready');
       const child = spawn(process.execPath, [FAKE_GROK], {
         detached: true,
         stdio: 'ignore',
@@ -173,17 +182,16 @@ setTimeout(() => {}, 3600000);
           HOME: '/tmp/grok-mcp-test-home',
           FAKE_GROK_IGNORE_SIGTERM: '1',
           FAKE_GROK_SLEEP_MS: '60000',
+          FAKE_GROK_READY_FILE: readyFile,
         },
       });
       const pid = await waitForSpawn(child);
       // The handler is installed at module evaluation. Signalling during
       // node startup hits the default SIGTERM disposition and looks like
       // a clean terminate — the opposite of what this test is measuring.
-      const readyAt = Date.now() + 200;
-      while (Date.now() < readyAt) {
-        assert.equal(processAlive(pid), true, 'child died before the ignore handler could install');
-        await delay(20);
-      }
+      // The fixture writes FAKE_GROK_READY_FILE after that handler is in;
+      // waiting for the file replaces a 200 ms guess that lost under load.
+      await waitForReadyFile(readyFile, pid, 10_000);
       const outcome = await terminateRun(pid, { graceMs: 250, pollMs: 20 });
       assert.deepEqual(outcome.signalsSent, ['SIGTERM', 'SIGKILL']);
       assert.equal(outcome.reason, 'killed');

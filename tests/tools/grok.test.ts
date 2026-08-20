@@ -3,6 +3,7 @@ import { access, chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadConfig } from '../../src/config.js';
@@ -45,6 +46,19 @@ async function makeTmp(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+async function waitForReadyFile(filePath: string, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await access(filePath);
+      return;
+    } catch {
+      await delay(20);
+    }
+  }
+  assert.fail(`ready file never appeared at ${filePath}`);
+}
 
 async function installFake(script: Record<string, string> = {}): Promise<{
   binary: string;
@@ -384,11 +398,27 @@ describe('grok error paths preserve buffered output', () => {
   });
 
   it('returns isError on timeout, names GROK_MCP_TIMEOUT_MS, and includes the partial output', async () => {
-    const { result } = await runGrok(
+    // Partial-output capture is what this test measures, not the size of the
+    // budget. 150 ms raced node starting the fake (same class as the exec
+    // helper's old 200 ms default): under load the timer fired at 175 ms
+    // before "so far" was written, and the assertion failed while the timeout
+    // path itself had worked. The handler starts the clock at spawn, so there
+    // is no seam to wait for FAKE_GROK_READY_FILE before the timer starts —
+    // raising the budget past startup is the available fix. Waiting for the
+    // file still fails loudly if the fake never writes, instead of matching a
+    // timeout message that simply never contained the partial output.
+    const readyFile = path.join(await makeTmp(), 'ready');
+    const pending = runGrok(
       { prompt: 'hi' },
-      { FAKE_GROK_STDOUT: 'so far', FAKE_GROK_SLEEP_MS: '10000' },
-      { GROK_MCP_TIMEOUT_MS: '150' },
+      {
+        FAKE_GROK_STDOUT: 'so far',
+        FAKE_GROK_SLEEP_MS: '10000',
+        FAKE_GROK_READY_FILE: readyFile,
+      },
+      { GROK_MCP_TIMEOUT_MS: '2000' },
     );
+    await waitForReadyFile(readyFile, 10_000);
+    const { result } = await pending;
 
     assert.equal(result.isError, true);
     assert.match(textOf(result), /timed out/);
