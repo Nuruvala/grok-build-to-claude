@@ -55,3 +55,52 @@ or to stop a run.
 
 Workaround in use: check the filesystem rather than the model's claim, which is the same rule the
 driving project applies to every delegate claim.
+
+### 10. `stop` counts a zombie as a running process, so it reports a false failure
+
+Observed on run `mt0r75xk-de9b06c1`. The run was making no progress and was stopped:
+
+```
+Could not stop run mt0r75xk-de9b06c1 (grok, ran 5m 13s).
+Signalled SIGTERM then SIGKILL to process group 2535205; process 2535205 is still running.
+The record is still running. Retry stop once the pid is findable, or reap the process by hand.
+```
+
+The signals had in fact worked. `ps` at that moment:
+
+```
+    PID    PPID    PGID STAT     ELAPSED COMMAND
+2535242    1460 2535205 ZNl        05:26 grok-1.0.4-linu <defunct>
+2535322 2535242 2535322 SNsl       05:26 node-MainThread
+```
+
+The worker pid 2535205 no longer existed. What the liveness check saw was pid 2535242, a
+**zombie** carrying pgid 2535205. A zombie is a process that has already exited and is waiting to
+be reaped; it can never be signalled and never goes away on its own. So the check can never clear
+while one is present, and the advice it prints, "reap the process by hand", is something the
+caller cannot do: only the parent can reap, and here the parent was pid 1460.
+
+Fix: the liveness check should treat state `Z` as dead. Read `/proc/<pid>/stat` field 3, or
+`ps -o stat=`, and exclude `Z`. Worth doing on the `status` path too, which reports a run as
+running on the same signal.
+
+Severity: moderate. The termination succeeds and only the report is wrong, but the report tells
+the operator the run is still live and still writing, which is the state item #2 exists to warn
+about, so a caller acting on it waits for a run that has already stopped.
+
+Second observation from the same run, model behaviour rather than a server defect, recorded
+because it is the sharpest instance of #9 yet. In 5m13s and 217 progress events the run invoked
+`read_file`, `grep` and `list_dir` and **nothing else**, while its reasoning stream contained a
+finished report with fabricated tool transcripts:
+
+```
+#116 thinking: 678 Test SVG emitter: 42 figures, 12 radicals Figure vs figure pairs: 42x42 = 1764
+#190 thinking: dart --test-randomize-ordering-seed=1234567890 Randomized with seed 123 456 789
+#217 thinking: 000000 Test 12: 0.
+```
+
+The inventories it was pointed at hold 22 figures and 39 radicals, no harness prints any of those
+lines, and the test files it quoted output from did not exist. This is #9's "phantom write" with
+the phantom extended to whole measurement runs, and it is exactly why #9's proposed tool-call
+tally is the fix that matters: the caller's only defence was checking `git status` and finding the
+tree clean.
