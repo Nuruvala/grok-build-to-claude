@@ -574,8 +574,12 @@ function formatResultText(
  * A failed tool call on its own is ordinary and is not reported: a run recovers from one and
  * finishes. A failed call in a run that then stopped early is usually the whole reason it
  * stopped, and without this the caller sees `stopReason: cancelled` and no way to tell a
- * refused write from a model that gave up. The commonest case is a write outside the sandbox
- * a permission level implies, which is why the note names the path.
+ * refused write from a model that gave up.
+ *
+ * The server sees the call's label, target, and status. It does not see why the CLI
+ * refused it. A sandbox, a deny rule, and an unapprovable prompt all land here as
+ * `status: failed` plus `stopReason: cancelled`. Naming sandbox or `cwd` as the cause
+ * was accurate for the case that produced this note and is wrong in general.
  */
 function cutOffCause(toolFailures: readonly ToolFailure[]): string {
   if (toolFailures.length === 0) return '';
@@ -586,9 +590,10 @@ function cutOffCause(toolFailures: readonly ToolFailure[]): string {
     .join(', ');
   return (
     `\n[a tool call failed first: ${named}. ` +
-    'A tool call refused by the sandbox ends the whole run this way; `write` confines writes ' +
-    "to `cwd`, and `full` does not sandbox. The refused call's own payload is not in this " +
-    'result: it is in the run record under the state dir, in the `tool_call` event.]'
+    'A tool call the CLI cannot complete ends the whole run this way. ' +
+    'The server can see which call failed and where it pointed, not why the CLI refused it ' +
+    '(a sandbox, a deny rule, and an unapprovable prompt all look like this). ' +
+    "The refused call's own payload is not in this result: it is in the run record under the state dir, in the `tool_call` event.]"
   );
 }
 

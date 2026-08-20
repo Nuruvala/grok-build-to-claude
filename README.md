@@ -128,9 +128,10 @@ call. Three levels:
 The sandbox is not advisory, and a refusal is not a warning. Under `write` the run **cannot write
 outside `cwd`**, and a refused tool call ends the **whole run**: the CLI reports
 `stopReason: cancelled`, exits 0, and returns only whatever the model had said before the refusal.
-The server names the refused call and its path in that case, so a sandbox refusal is not mistaken
-for a model that gave up. If a run must write somewhere else, say a report outside the repository,
-either point it at a path inside `cwd` or use `full`.
+The server names the refused call and its path in that case, so a refused tool is not mistaken for a
+model that gave up. The server can see which call failed, not why the CLI refused it. If a run must
+write somewhere else, say a report outside the repository, either point it at a path inside `cwd` or
+use `full`.
 
 `write` uses `--permission-mode auto` rather than `acceptEdits`, which is measured rather than
 inherited from the flag's name. Headless grok has no human to accept an edit, so under

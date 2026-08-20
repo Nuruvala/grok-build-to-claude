@@ -163,7 +163,12 @@ export async function startBackgroundRun(
         }
       }
       child.unref();
-      return startedResult(record, workerPid, ctx.config.structuredContentEnabled);
+      return startedResult(
+        record,
+        workerPid,
+        ctx.config.structuredContentEnabled,
+        runDir(ctx.config.stateDir, runId),
+      );
     } finally {
       await logHandle.close();
     }
@@ -267,6 +272,7 @@ function startedResult(
   },
   workerPid: number | null,
   structuredContentEnabled: boolean,
+  storePath: string,
 ): ToolResult {
   const meta = Object.freeze({
     runId: record.runId,
@@ -276,6 +282,7 @@ function startedResult(
     workerPid,
     createdAt: record.createdAt,
     summary: record.summary,
+    runDir: storePath,
   });
 
   const text = [
@@ -283,6 +290,7 @@ function startedResult(
     '',
     `  status  { "runId": "${record.runId}" }             poll it`,
     `  status  { "runId": "${record.runId}", "waitMs": 30000 }   wait for it`,
+    `  store   ${storePath}   stdout.log if the result is lost`,
     '',
     'Progress is recorded while it runs; the run continues if this MCP server restarts.',
   ].join('\n');

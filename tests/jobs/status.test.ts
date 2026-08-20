@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { loadConfig } from '../../src/config.js';
 import { InvalidArgumentsError } from '../../src/errors.js';
+import { REPEAT_MIN_LINES } from '../../src/jobs/repeat.js';
 import {
   claimTerminal,
   createRun,
+  runDir,
   writeLateResult,
   writeProgress,
   writeTerminal,
@@ -384,7 +386,10 @@ describe('status tool-call tally', () => {
       toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
     });
 
-    const result = await statusTool.handler({ runId: 'mtest0020-7001ca11', tail: 0 }, ctxFor(stateDir));
+    const result = await statusTool.handler(
+      { runId: 'mtest0020-7001ca11', tail: 0 },
+      ctxFor(stateDir),
+    );
     assert.match(textOf(result), /tools:\s+0/);
     assert.equal(metaOf(result)['toolCalls'], 0);
     assert.deepEqual(metaOf(result)['toolCallsByLabel'], {});
@@ -412,7 +417,10 @@ describe('status tool-call tally', () => {
       },
     });
 
-    const result = await statusTool.handler({ runId: 'mtest0021-7ea0c011', tail: 0 }, ctxFor(stateDir));
+    const result = await statusTool.handler(
+      { runId: 'mtest0021-7ea0c011', tail: 0 },
+      ctxFor(stateDir),
+    );
     assert.match(
       textOf(result),
       /tools:\s+3 {2}grep 1, list_dir 1, read_file 1 {2}\(last 1m \d{2}s ago\)/,
@@ -441,9 +449,120 @@ describe('status tool-call tally', () => {
       lastProgressAt: '2026-08-17T12:00:10.000Z',
     });
 
-    const result = await statusTool.handler({ runId: 'mtest0022-01d51de0', tail: 0 }, ctxFor(stateDir));
+    const result = await statusTool.handler(
+      { runId: 'mtest0022-01d51de0', tail: 0 },
+      ctxFor(stateDir),
+    );
     assert.doesNotMatch(textOf(result), /tools:/);
     assert.equal(metaOf(result)['toolCalls'], undefined);
+  });
+});
+
+describe('status repeating-progress advisory', () => {
+  async function seedLiveWithProgressLog(
+    runId: string,
+    logLines: readonly string[],
+  ): Promise<string> {
+    const stateDir = await makeState();
+    await createRun({
+      stateDir,
+      runId,
+      tool: 'grok',
+      summary: 'art pass',
+      cwd: '/tmp',
+      input: { prompt: 'draw' },
+    });
+    await writeProgress(stateDir, runId, {
+      progressCount: logLines.length,
+      lastProgress: logLines[logLines.length - 1] ?? null,
+      lastProgressAt: new Date().toISOString(),
+      toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
+    });
+    await writeFile(path.join(runDir(stateDir, runId), 'progress.log'), `${logLines.join('\n')}\n`);
+    return stateDir;
+  }
+
+  it('adds one advisory line when the progress tail is a repeating-plan loop', async () => {
+    const cycle = [
+      'thinking: **house**: house with chimney (filled walls 2, roof, chimney, door).',
+      'thinking: **store 2**: store 2 with sign (filled 2 walls, roof, sign 2, window paper).',
+      'thinking: **store 2**: store 2 with sign (filled 2 2 walls, roof, sign 2, window paper).',
+      'thinking: **cook**: pot with steam and food (filled pot, lid, steam, 2 2 food).',
+    ];
+    const lines: string[] = [];
+    while (lines.length < REPEAT_MIN_LINES) {
+      const body = cycle[lines.length % cycle.length];
+      lines.push(`#${String(lines.length + 1)} ${body ?? ''}`);
+    }
+    const stateDir = await seedLiveWithProgressLog('mtest0030-a0d150a1', lines);
+    const result = await statusTool.handler(
+      { runId: 'mtest0030-a0d150a1', tail: 0 },
+      ctxFor(stateDir),
+    );
+    assert.match(
+      textOf(result),
+      /progress has been repeating for \d+ events; the run may be stuck/,
+    );
+    assert.equal(metaOf(result)['progressRepeating'], true);
+    assert.equal(typeof metaOf(result)['repeatingEvents'], 'number');
+  });
+
+  it('does not advise when the tail is fifty distinct read_file lines', async () => {
+    const lines = Array.from(
+      { length: 50 },
+      (_, i) => `#${String(i + 1)} read_file src/file-${String(i)}.ts`,
+    );
+    const stateDir = await seedLiveWithProgressLog('mtest0031-50f11e5a', lines);
+    await writeProgress(stateDir, 'mtest0031-50f11e5a', {
+      progressCount: 50,
+      lastProgress: lines[49] ?? null,
+      lastProgressAt: new Date().toISOString(),
+      toolCalls: { total: 50, byLabel: { read_file: 50 }, lastCallAt: new Date().toISOString() },
+    });
+    const result = await statusTool.handler(
+      { runId: 'mtest0031-50f11e5a', tail: 0 },
+      ctxFor(stateDir),
+    );
+    assert.doesNotMatch(textOf(result), /progress has been repeating/);
+    assert.equal(metaOf(result)['progressRepeating'], undefined);
+  });
+});
+
+describe('status recoverable output pointer', () => {
+  it('points at stdout.log on a cut-off run, and names the store on a live one', async () => {
+    const stateDir = await makeState();
+    await seedTerminal(stateDir, 'mtest0032-c070ff00', {
+      state: 'completed',
+      endedAt: '2026-08-17T12:00:00.000Z',
+      stopReason: 'cancelled',
+      result: {
+        text: 'partial\n\n[the run stopped early — stopReason: cancelled]',
+        meta: { stopReason: 'cancelled' },
+        isError: false,
+      },
+    });
+    const cut = await statusTool.handler({ runId: 'mtest0032-c070ff00' }, ctxFor(stateDir));
+    const cutDir = runDir(stateDir, 'mtest0032-c070ff00');
+    assert.ok(textOf(cut).includes(`store:        ${cutDir}`));
+    assert.ok(textOf(cut).includes(`recoverable:  ${cutDir}/stdout.log`));
+    assert.equal(metaOf(cut)['runDir'], cutDir);
+
+    await createRun({
+      stateDir,
+      runId: 'mtest0033-11fe0001',
+      tool: 'grok',
+      summary: 'live',
+      cwd: '/tmp',
+      input: { prompt: 'hi' },
+    });
+    const live = await statusTool.handler(
+      { runId: 'mtest0033-11fe0001', tail: 0 },
+      ctxFor(stateDir),
+    );
+    const liveDir = runDir(stateDir, 'mtest0033-11fe0001');
+    assert.ok(textOf(live).includes(`store:        ${liveDir}`));
+    assert.doesNotMatch(textOf(live), /recoverable:/);
+    assert.equal(metaOf(live)['runDir'], liveDir);
   });
 });
 

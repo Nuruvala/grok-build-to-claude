@@ -452,14 +452,16 @@ function incompleteReviewExplanation(
       return (
         `The run stopped with stopReason "${stopReason}"${turns} (maxTurns ${String(maxTurns)}) ` +
         `${cutOffClause}${cliReported} ` +
-        `Raise maxTurns above ${String(maxTurns)} or narrow the review target.`
+        `A set maxTurns is one possible cause, not a confirmed one (cancelled does not imply a turn cap). ` +
+        `Raise maxTurns above ${String(maxTurns)} only if the run was still working; otherwise inspect the run record.`
       );
     }
     return (
       `The run stopped with stopReason "${stopReason}"${turns} ${cutOffClause}` +
       `${cliReported} ` +
       'No maxTurns limit was set, so the turn budget was not the cause. ' +
-      'Narrow the review target and retry.'
+      'The stop reason alone does not say whether a tool call was refused or the model stopped short. ' +
+      'Retry, or inspect the run record.'
     );
   }
   return (

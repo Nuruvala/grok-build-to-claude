@@ -743,8 +743,9 @@ describe('grok streaming outcomes', () => {
     const text = textOf(result);
     assert.match(text, /\[the run stopped early — stopReason: cancelled\]/);
     assert.match(text, /a tool call failed first: write \/outside\/the\/workspace\/report\.md/);
-    // The whole point: the caller can tell a sandbox refusal from a model that gave up.
-    assert.match(text, /confines writes/);
+    // The caller can tell a refused tool from a model that gave up. The note
+    // names the call; it does not invent a sandbox as the reason.
+    assert.match(text, /which call failed and where it pointed, not why/);
   });
 
   it('does not name a failed tool call on a run that finished, because recovering from one is ordinary', async () => {

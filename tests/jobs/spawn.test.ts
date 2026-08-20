@@ -147,7 +147,15 @@ describe('startBackgroundRun concurrent-run cap', () => {
     const result = await start(config);
     trackStarted(result);
     assert.notEqual(result.isError, true);
-    assert.equal(result.content[0]?._meta?.['state'], 'starting');
+    const block = result.content[0];
+    assert.ok(block);
+    const meta = block._meta;
+    assert.ok(meta);
+    assert.equal(meta['state'], 'starting');
+    const startedDir = meta['runDir'];
+    assert.equal(typeof startedDir, 'string');
+    assert.match(block.text, /stdout\.log if the result is lost/);
+    assert.ok(block.text.includes(String(startedDir)));
   });
 
   it('throws TooManyRunsError when the live count is already at the cap', async () => {

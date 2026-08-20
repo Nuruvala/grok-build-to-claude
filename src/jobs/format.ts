@@ -6,6 +6,8 @@
  * stamp would make the same run look different in two places.
  */
 
+import path from 'node:path';
+
 import {
   isCutOff,
   isTerminal,
@@ -48,6 +50,7 @@ export function formatRunDetail(
   record: RunRecord,
   nowMs: number,
   progress?: RunProgress | null,
+  storePath?: string | null,
 ): string {
   const elapsed = formatElapsed(elapsedMs(record, nowMs));
   const lines = [
@@ -58,6 +61,15 @@ export function formatRunDetail(
     `  workerPid:    ${formatPid(record.workerPid)}`,
     `  childPid:     ${formatPid(record.childPid)}`,
   ];
+  if (storePath !== undefined && storePath !== null && storePath !== '') {
+    lines.push(`  store:        ${storePath}`);
+    if (needsRecoverablePointer(record)) {
+      // Named so a caller who lost the model's write does not have to know
+      // that background runs keep stdout.log. The file is already there;
+      // this is a pointer, not a second read of it.
+      lines.push(`  recoverable:  ${path.join(storePath, 'stdout.log')}`);
+    }
+  }
   if (!isTerminal(record.state)) {
     lines.push(`  last:         ${formatLastProgress(record, nowMs)}`);
     const toolsLine = formatToolCallLine(progress?.toolCalls, nowMs);
@@ -69,6 +81,17 @@ export function formatRunDetail(
     lines.push(`  error:        ${record.error}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Point at stdout.log when the stored result is missing, a fragment, or a
+ * cancellation. A clean `end_turn` completion already has the answer in the
+ * body; naming the log there is noise.
+ */
+function needsRecoverablePointer(record: RunRecord): boolean {
+  if (!isTerminal(record.state)) return false;
+  if (record.state !== 'completed') return true;
+  return isCutOff(record) || record.result === null;
 }
 
 /** `"2026-08-16 21:50"` (UTC) or `"(unknown)"`. */
@@ -107,10 +130,7 @@ function formatLastProgress(record: RunRecord, nowMs: number): string {
  * One line for a live run. `null` when the sidecar predates the tally, so a
  * missing count is not rendered as zero tools.
  */
-export function formatToolCallLine(
-  tally: ToolCallTally | undefined,
-  nowMs: number,
-): string | null {
+export function formatToolCallLine(tally: ToolCallTally | undefined, nowMs: number): string | null {
   if (tally === undefined) return null;
   if (tally.total === 0) return '0';
   const labels = Object.keys(tally.byLabel).sort();

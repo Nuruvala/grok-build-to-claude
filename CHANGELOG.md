@@ -10,6 +10,34 @@ becomes the version heading and a fresh empty `Unreleased` takes its place.
 
 ## Unreleased
 
+### Added
+
+- `status` reports a per-run tool-call tally: the total, a breakdown by tool label, and how long ago
+  the last call was. A run that spends a quarter of an hour asserting in its reasoning that it wrote
+  a file, having called no write tool, is now visible as such to a caller who is only polling. A
+  sidecar written before the field existed omits the line rather than reporting zero, because a
+  missing tally is not a count of nothing.
+- `status` adds one advisory line when the progress tail is a repeating-plan loop, derived at read
+  time so `readOnlyHint` stays honest. A window of distinct `read_file` lines (work, not a loop)
+  does not fire it.
+
+### Fixed
+
+- A zombie is dead for liveness. `process.kill(pid, 0)` and `process.kill(-pid, 0)` both succeed
+  against a process that has exited and not yet been reaped, so `stop` reported that it had failed
+  to kill a tree that was already gone, and told the operator to reap a process only its parent
+  could reap. Linux liveness now reads `/proc/<pid>/stat` and treats state `Z` as dead, and the
+  group check is alive only when at least one member is not a zombie. `status` reaches the same
+  check, so a zombie worker is reported as abandoned.
+- The cut-off note no longer attributes every refused tool call to a sandbox or a write outside
+  `cwd`. It names the call and says the server cannot see why the CLI refused it.
+- `status` and the background-start result point at the run directory and, on a fragment, at
+  `stdout.log`, so recovering a write that never landed on disk is not a path the caller has to
+  know.
+- Two spawn-timing tests asserted wall-clock duration against `SIGKILL_GRACE_MS` and a drain
+  backstop, so they failed under load. They now assert on outcome. The exec helper's default timeout
+  is a backstop, not a 200ms measurement of interpreter startup.
+
 ## [0.2.4] — 2026-08-18
 
 The `write` permission level could not write. Found immediately after 0.2.3, by the diagnostic 0.2.3

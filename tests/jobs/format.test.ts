@@ -88,33 +88,58 @@ describe('formatRunLine / formatRunHeader / formatRunDetail', () => {
     assert.equal(elapsedMs(record({ endedAt: '2026-08-17T12:00:45.000Z' }), now), 45_000);
   });
 
-  it('renders a tool-call tally on a live detail and omits it when the sidecar predates the field', () => {
-    const live = formatRunDetail(
-      record(),
+  it('names the store path on a live run and stdout.log on a cut-off, so lost output is findable', () => {
+    const store = '/tmp/grok-mcp/runs/mfk2p1x9-3ac71f0b';
+    const live = formatRunDetail(record(), now, null, store);
+    assert.match(live, /store:\s+\/tmp\/grok-mcp\/runs\/mfk2p1x9-3ac71f0b/);
+    assert.doesNotMatch(live, /recoverable:/);
+
+    const cut = formatRunDetail(
+      record({
+        state: 'completed',
+        stopReason: 'cancelled',
+        endedAt: '2026-08-17T12:00:45.000Z',
+      }),
       now,
-      {
-        progressCount: 3,
-        lastProgress: '#3 thinking: (file written)',
-        lastProgressAt: '2026-08-17T12:00:10.000Z',
-        toolCalls: {
-          total: 3,
-          byLabel: { read_file: 2, grep: 1 },
-          lastCallAt: '2026-08-17T12:00:08.000Z',
-        },
-      },
+      null,
+      store,
     );
+    assert.match(cut, /recoverable:\s+\/tmp\/grok-mcp\/runs\/mfk2p1x9-3ac71f0b\/stdout\.log/);
+
+    const clean = formatRunDetail(
+      record({
+        state: 'completed',
+        stopReason: 'end_turn',
+        endedAt: '2026-08-17T12:00:45.000Z',
+        result: { text: 'ok', meta: {}, isError: false },
+      }),
+      now,
+      null,
+      store,
+    );
+    assert.match(clean, /store:/);
+    assert.doesNotMatch(clean, /recoverable:/);
+  });
+
+  it('renders a tool-call tally on a live detail and omits it when the sidecar predates the field', () => {
+    const live = formatRunDetail(record(), now, {
+      progressCount: 3,
+      lastProgress: '#3 thinking: (file written)',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+      toolCalls: {
+        total: 3,
+        byLabel: { read_file: 2, grep: 1 },
+        lastCallAt: '2026-08-17T12:00:08.000Z',
+      },
+    });
     assert.match(live, /tools:\s+3 {2}grep 1, read_file 2 {2}\(last 52s ago\)/);
 
-    const none = formatRunDetail(
-      record(),
-      now,
-      {
-        progressCount: 12,
-        lastProgress: '#12 thinking: (file written)',
-        lastProgressAt: '2026-08-17T12:00:10.000Z',
-        toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
-      },
-    );
+    const none = formatRunDetail(record(), now, {
+      progressCount: 12,
+      lastProgress: '#12 thinking: (file written)',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+      toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
+    });
     assert.match(none, /tools:\s+0$/m);
     assert.doesNotMatch(none, /last 52s ago/);
 
@@ -145,10 +170,7 @@ describe('formatToolCallLine', () => {
 
   it('returns null for a missing tally, 0 for an empty one, and a sorted breakdown when tools ran', () => {
     assert.equal(formatToolCallLine(undefined, now), null);
-    assert.equal(
-      formatToolCallLine({ total: 0, byLabel: {}, lastCallAt: null }, now),
-      '0',
-    );
+    assert.equal(formatToolCallLine({ total: 0, byLabel: {}, lastCallAt: null }, now), '0');
     assert.equal(
       formatToolCallLine(
         {

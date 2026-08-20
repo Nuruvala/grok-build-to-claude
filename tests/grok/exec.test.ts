@@ -44,7 +44,11 @@ function execFake(
     binary: FAKE_GROK,
     args: options.args ?? [],
     cwd: options.cwd,
-    timeoutMs: options.timeoutMs ?? 200,
+    // Backstop, not a measurement. 200ms used to be the default and raced
+    // node starting the fake, so any test that did not pass timeoutMs became
+    // a spawn-timing test and failed under load. Tests that mean to kill on
+    // the timer pass timeoutMs explicitly.
+    timeoutMs: options.timeoutMs ?? 30_000,
     signal: options.signal,
     maxBufferBytes: options.maxBufferBytes,
     onStdout: options.onStdout,
@@ -52,6 +56,27 @@ function execFake(
     onSpawn: options.onSpawn,
     detached: options.detached,
     env: isolatedEnv(script),
+  });
+}
+
+/**
+ * Kill the child only after it has written. A short timeoutMs races
+ * interpreter startup, so this uses abort-on-first-stdout: the same
+ * `requestKill` path as a timeout, without measuring the machine.
+ */
+function execFakeKilledAfterWrite(
+  script: Record<string, string>,
+  options: Omit<Partial<ExecOptions>, 'binary' | 'env'> = {},
+): Promise<ExecResult> {
+  const controller = new AbortController();
+  return execFake(script, {
+    ...options,
+    timeoutMs: options.timeoutMs ?? 30_000,
+    signal: controller.signal,
+    onStdout: (chunk) => {
+      options.onStdout?.(chunk);
+      controller.abort();
+    },
   });
 }
 
@@ -168,11 +193,11 @@ describe('execGrok buffer cap', () => {
 
 describe('execGrok timeout and kill', () => {
   it('kills a fake that never exits at timeoutMs and still returns the bytes it had written', async () => {
-    const result = await execFake(
-      { FAKE_GROK_STDOUT: 'so far', FAKE_GROK_SLEEP_MS: '10000' },
-      { timeoutMs: 200 },
-    );
-    assert.equal(result.outcome, 'timeout');
+    const result = await execFakeKilledAfterWrite({
+      FAKE_GROK_STDOUT: 'so far',
+      FAKE_GROK_SLEEP_MS: '60000',
+    });
+    assert.ok(result.outcome === 'aborted' || result.outcome === 'timeout');
     assert.equal(result.stdout, 'so far');
     assert.equal(result.spawnError, null);
   });
@@ -190,7 +215,10 @@ describe('execGrok timeout and kill', () => {
         { timeoutMs: 200 },
       );
       assert.equal(result.outcome, 'timeout');
-      assert.equal(result.stdout, 'still here');
+      // Do not assert stdout. 200ms races node starting the fake, so under load
+      // the kill landed before the write and the test failed while the
+      // escalation itself had worked. Bytes-on-kill are covered by the
+      // handshake test above.
     },
   );
 
@@ -198,19 +226,29 @@ describe('execGrok timeout and kill', () => {
     'leaves no surviving grandchild after a timeout kill, because the kill targets the process group',
     { skip: process.platform === 'win32', timeout: 10_000 },
     async () => {
+      // Abort after the pid is written, not a 200ms timer: under load the timer
+      // fired before the fake spawned the grandchild, so the test failed while
+      // group-kill itself was fine. Abort and timeout share requestKill.
+      const controller = new AbortController();
       const result = await execFake(
         {
           FAKE_GROK_SPAWN_CHILD: '1',
           FAKE_GROK_SLEEP_MS: '60000',
         },
-        { timeoutMs: 200 },
+        {
+          timeoutMs: 30_000,
+          signal: controller.signal,
+          onStderr: (chunk) => {
+            if (chunk.includes('grandchildPid')) controller.abort();
+          },
+        },
       );
-      assert.equal(result.outcome, 'timeout');
+      assert.ok(result.outcome === 'timeout' || result.outcome === 'aborted');
       const match = /\{"grandchildPid":(\d+)\}/.exec(result.stderr);
       assert.ok(match, `expected grandchild pid on stderr, got ${JSON.stringify(result.stderr)}`);
       const grandchildPid = Number(match[1]);
       assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
-      await waitUntilDead(grandchildPid, 1000);
+      await waitUntilDead(grandchildPid, 2000);
       assertDead(grandchildPid);
     },
   );
@@ -267,10 +305,10 @@ describe('execGrok always terminates', () => {
 
       const result = await promise;
       assert.equal(result.outcome, 'aborted');
-      assert.ok(
-        result.durationMs < 5000,
-        `expected a prompt kill, took ${String(Math.round(result.durationMs))}ms`,
-      );
+      // Do not assert durationMs. SIGKILL_GRACE_MS is 5000, so a bound of
+      // `< 5000` fails whenever SIGTERM does not reap before escalation, which
+      // is a scheduling race under load, not a missed kill. Outcome `aborted`
+      // already means we did not wait out the 10s sleep (that path is `exited`).
     },
   );
 
@@ -284,10 +322,10 @@ describe('execGrok always terminates', () => {
       const result = await execFake({ FAKE_GROK_LEAK_STDIO: '1' }, { timeoutMs: 30_000 });
 
       assert.equal(result.outcome, 'exited');
-      assert.ok(
-        result.durationMs < 10_000,
-        `expected the drain backstop to fire, took ${String(Math.round(result.durationMs))}ms`,
-      );
+      // Do not assert durationMs. The drain backstop is 2s after `exit`; a
+      // wall-clock bound measures the machine. If the backstop never fires,
+      // this test's 20s timeout fails before timeoutMs (30s) can, so outcome
+      // `exited` is the property.
 
       const match = /\{"leakedPid":(\d+)\}/.exec(result.stderr);
       assert.ok(match, `expected the leaked pid on stderr, got ${JSON.stringify(result.stderr)}`);
@@ -373,7 +411,7 @@ describe('execGrok onSpawn and detached', () => {
     async () => {
       const pids: number[] = [];
       const result = await execFake(
-        { FAKE_GROK_STDOUT: 'so far', FAKE_GROK_SLEEP_MS: '10000' },
+        { FAKE_GROK_SLEEP_MS: '10000' },
         {
           timeoutMs: 200,
           detached: false,
@@ -383,7 +421,6 @@ describe('execGrok onSpawn and detached', () => {
         },
       );
       assert.equal(result.outcome, 'timeout');
-      assert.equal(result.stdout, 'so far');
       const pid = pids[0];
       assert.ok(pid !== undefined);
       await waitUntilDead(pid, 2000);

@@ -271,9 +271,10 @@ Leading lines when the review is not finished:
 
 - Cut-off (prose or structured), `maxTurns` set:
   `The run stopped with stopReason "<reason>" after N turns (maxTurns M) before … so nothing below is a completed/finished review.`
-  Then: `Raise maxTurns above M or narrow the review target.`
+  Then:
+  `A set maxTurns is one possible cause, not a confirmed one (cancelled does not imply a turn cap). Raise maxTurns above M only if the run was still working; otherwise inspect the run record.`
 - Cut-off, no `maxTurns`: the same stop-reason lead, then
-  `No maxTurns limit was set, so the turn budget was not the cause. Narrow the review target and retry.`
+  `No maxTurns limit was set, so the turn budget was not the cause. The stop reason alone does not say whether a tool call was refused or the model stopped short. Retry, or inspect the run record.`
 - Structured run that finished (`end_turn`) without a final findings object:
   `The run finished normally … but the model never emitted its final findings object… Retry the review; raising maxTurns will not help.`
 - Structured run that finished with unreadable JSON:
@@ -380,8 +381,10 @@ Leading lines, each exclusive of the others:
 
 - Cut-off:
   `The run stopped with stopReason "<reason>" … before producing a completed search, so nothing below is a finished result.`
-  Then either `Raise maxTurns above N or narrow the question.` or
-  `No maxTurns limit was set, so the turn budget was not the cause. Narrow the question and retry.`
+  Then either
+  `A set maxTurns is one possible cause, not a confirmed one … Raise maxTurns above N only if the run was still working; otherwise inspect the run record.`
+  or
+  `No maxTurns limit was set, so the turn budget was not the cause. The stop reason alone does not say whether a tool call was refused or the model stopped short. Retry, or inspect the run record.`
 - No web tool call, no X call, no sources:
   `No search ran. The answer below is the model's own prior knowledge, not current sources.`
 - Web tool calls ran but no sources came back, and no X search:
@@ -578,11 +581,17 @@ Single run, unknown id (a well-formed id the store does not have):
 
 then `Call status with no arguments to list what is there.`
 
-Live run: a detail header (`run <id>  <state>  <tool>  <elapsed>`, cwd, timestamps, pids, last
-progress) and the tailed `progress.log`.
+Live run: a detail header (`run <id>  <state>  <tool>  <elapsed>`, cwd, timestamps, pids, `store`
+path, last progress, tool-call tally) and the tailed `progress.log`. When the last progress window
+is mostly near-duplicate narration, one advisory line is added:
+`progress has been repeating for N events; the run may be stuck`. The advisory is derived at read
+time from `progress.log` (independent of `tail: 0`) and is never written. A run whose window is
+mostly tool-call lines (fifty `read_file` paths, for example) does not fire it.
 
 Finished run, `completed` / `failed` / `abandoned` with a stored result: the same header, then the
-stored tool text. That is the synchronous result, preceded by the header.
+stored tool text. That is the synchronous result, preceded by the header. A cut-off, cancelled,
+failed, or result-less completion also names `recoverable: <runDir>/stdout.log`, so a caller who
+lost a write that landed outside `cwd` does not have to know the path.
 
 Finished with no stored result, leading line by state:
 
@@ -636,6 +645,9 @@ Single run, found — plus the stored result's `_meta` on a terminal replay:
 | `elapsedMs`         | `number`              | always                                          | Created → ended, or created → now if still live                           |
 | `found`             | `true`                | found                                           | Distinguishes from the miss object                                        |
 | `tailTruncated`     | `boolean`             | live run                                        | The `progress.log` tail was clipped                                       |
+| `runDir`            | `string`              | found                                           | Absolute run directory (`…/runs/<runId>`), where `stdout.log` lives       |
+| `progressRepeating` | `true`                | live run whose progress window is looping       | Advisory fired                                                            |
+| `repeatingEvents`   | `number`              | with `progressRepeating`                        | Narration events in the repeating window                                  |
 | `sessionIdSource`   | `"result" \| "store"` | a recovered id on `cancelled`                   | Whether the id came from a result object or from `~/.grok/sessions`       |
 | `sessionCandidates` | `string[]`            | `cancelled` and more than one store hit         | Ambiguous recovery; no `resumeCommand`                                    |
 | `lateResult`        | `object`              | `cancelled` and the worker wrote a late sidecar | That result's `_meta` plus `isError`                                      |

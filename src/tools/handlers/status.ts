@@ -13,6 +13,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 
 import { elapsedMs, formatRunDetail, formatRunHeader, formatRunLine } from '../../jobs/format.js';
+import { progressLines, repeatingProgressAdvisory } from '../../jobs/repeat.js';
 import { displayRecord, STARTUP_GRACE_MS } from '../../jobs/liveness.js';
 import {
   isCutOff,
@@ -255,7 +256,8 @@ function orphanErrorText(stateDir: string, runId: string): string {
 
 async function terminalResult(record: RunRecord, ctx: ToolContext): Promise<ToolResult> {
   const stored = record.result;
-  const header = formatRunDetail(record, Date.now());
+  const dir = runDir(ctx.config.stateDir, record.runId);
+  const header = formatRunDetail(record, Date.now(), null, dir);
   const late =
     record.state === 'cancelled' ? await readLateResult(ctx.config.stateDir, record.runId) : null;
 
@@ -283,6 +285,7 @@ async function terminalResult(record: RunRecord, ctx: ToolContext): Promise<Tool
     ...runMeta(record),
     ...sessionResolutionMeta(resolved),
     found: true,
+    runDir: dir,
   };
   if (late !== null) {
     // A cancelled run must never render as a completed one. lateResult is
@@ -402,26 +405,45 @@ async function liveResult(
   ctx: ToolContext,
   tailBytes: number,
 ): Promise<ToolResult> {
-  const header = formatRunDetail(record, Date.now(), progress);
-  const progressPath = path.join(runDir(ctx.config.stateDir, record.runId), 'progress.log');
+  const dir = runDir(ctx.config.stateDir, record.runId);
+  const header = formatRunDetail(record, Date.now(), progress, dir);
+  const progressPath = path.join(dir, 'progress.log');
+  // The advisory is derived from the log, not from the caller's `tail` size, so
+  // a poll with `tail: 0` still sees a stuck loop. Displayed tail is separate.
+  const heuristicRead = await tailFile(progressPath, DEFAULT_TAIL_BYTES);
+  const advisory = repeatingProgressAdvisory(progressLines(heuristicRead.text));
   let tail = '';
   let tailTruncated = false;
   if (tailBytes > 0) {
-    const tailed = await tailFile(progressPath, tailBytes);
-    tail = tailed.text;
-    tailTruncated = tailed.truncated;
+    if (tailBytes === DEFAULT_TAIL_BYTES) {
+      tail = heuristicRead.text;
+      tailTruncated = heuristicRead.truncated;
+    } else {
+      const tailed = await tailFile(progressPath, tailBytes);
+      tail = tailed.text;
+      tailTruncated = tailed.truncated;
+    }
   }
   const parts = [header];
+  if (advisory !== null) {
+    parts.push('', advisory.line);
+  }
   if (tail !== '') {
     parts.push('', tail.endsWith('\n') ? tail.slice(0, -1) : tail);
   }
+  const meta: Record<string, unknown> = {
+    ...runMeta(record, progress),
+    found: true,
+    tailTruncated,
+    runDir: dir,
+  };
+  if (advisory !== null) {
+    meta['progressRepeating'] = true;
+    meta['repeatingEvents'] = advisory.repeatingEvents;
+  }
   return statusResult({
     text: parts.join('\n'),
-    meta: {
-      ...runMeta(record, progress),
-      found: true,
-      tailTruncated,
-    },
+    meta,
     isError: false,
     ctx,
   });
