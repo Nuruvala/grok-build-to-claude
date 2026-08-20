@@ -278,14 +278,8 @@ describe('groupVerdictFromMembers', () => {
   it('is live when any member of the group is not a zombie, zombies-only when every member is, and unreadable when none match', () => {
     const pgid = 2535205;
     assert.equal(groupVerdictFromMembers(pgid, []), 'unreadable');
-    assert.equal(
-      groupVerdictFromMembers(pgid, [{ state: 'S', pgrp: 1 }]),
-      'unreadable',
-    );
-    assert.equal(
-      groupVerdictFromMembers(pgid, [{ state: 'Z', pgrp: pgid }]),
-      'zombies-only',
-    );
+    assert.equal(groupVerdictFromMembers(pgid, [{ state: 'S', pgrp: 1 }]), 'unreadable');
+    assert.equal(groupVerdictFromMembers(pgid, [{ state: 'Z', pgrp: pgid }]), 'zombies-only');
     assert.equal(
       groupVerdictFromMembers(pgid, [
         { state: 'Z', pgrp: pgid },
@@ -300,10 +294,7 @@ describe('groupVerdictFromMembers', () => {
       ]),
       'live',
     );
-    assert.equal(
-      groupVerdictFromMembers(pgid, [{ state: 'R', pgrp: pgid }]),
-      'live',
-    );
+    assert.equal(groupVerdictFromMembers(pgid, [{ state: 'R', pgrp: pgid }]), 'live');
   });
 });
 
