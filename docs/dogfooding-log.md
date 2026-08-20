@@ -104,3 +104,46 @@ lines, and the test files it quoted output from did not exist. This is #9's "pha
 the phantom extended to whole measurement runs, and it is exactly why #9's proposed tool-call
 tally is the fix that matters: the caller's only defence was checking `git status` and finding the
 tree clean.
+
+---
+
+## 11. `stop` is clean when the worker is not a zombie, and a long run can loop forever
+
+Two observations from the same session as #10, on a three-round art pass in `stele`. Both are
+about long runs, and one of them is a feature suggestion rather than a defect.
+
+**The `stop` path works.** A run stuck at 11m02s was terminated with:
+
+```
+Stopped run mt1pd5kg-eb078f30 (grok, ran 11m 02s).
+Signalled SIGTERM to process group 2573052; the tree exited.
+```
+
+No false failure, no manual `kill`. That is the same code path #10 reports as broken, so #10 is
+confirmed as specific to the zombie case rather than general: the liveness check is right whenever
+the worker leaves no zombie behind, and wrong exactly when it does. Narrows the fix and narrows
+the test that should go with it.
+
+**A long run can enter a degenerate repeating-plan loop, and the progress tail is what shows it.**
+The stopped run spent eleven minutes never writing a file. Its progress stream repeated one plan
+with accumulating garbage tokens:
+
+```
+#271 thinking: **house**: house with chimney (filled walls 2, roof, chimney, door).
+#331 thinking: **store 2**: store 2 with sign (filled 2 walls, roof, sign 2, window paper).
+#390 thinking: **store 2**: store 2 with sign (filled 2 2 walls, roof, sign 2, window paper).
+#392 thinking: **cook**: pot with steam and food (filled pot, lid, steam, 2 2 food).
+```
+
+Model behaviour, not a server defect, and the server came out of it well: polling `status` with a
+`tail` made the loop legible at about eight minutes, against a run that would otherwise have been
+waited out. The same task split into two smaller runs completed.
+
+Feature worth considering: `status` already has every progress line. A cheap heuristic over the
+last N events, such as a high proportion of near-duplicate lines, could add one advisory line to
+the status output ("progress has been repeating for N events; the run may be stuck"). It costs
+nothing when the run is healthy and it turns an eleven-minute wait into a one-poll decision. This
+is the same family as #9's tool-call tally: cheap signals computed from data the server already
+holds, which let the caller distinguish a working run from a run that is only talking.
+
+Severity: minor for the feature, and #10's severity is unchanged. Batch both.
