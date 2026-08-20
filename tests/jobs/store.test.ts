@@ -340,12 +340,16 @@ describe('progress.json', () => {
       lastProgressAt: '2026-08-17T12:00:10.000Z',
     });
     const progress = await readProgress(stateDir, created.runId);
+    // Before the deepEqual: `assert.deepEqual` is an `asserts actual is T`
+    // signature, so it narrows `progress` to the literal shape below and a
+    // later read of `toolCalls` stops typechecking.
+    assert.ok(progress);
+    assert.equal(progress.toolCalls, undefined);
     assert.deepEqual(progress, {
       progressCount: 4,
       lastProgress: '#4 list_dir .',
       lastProgressAt: '2026-08-17T12:00:10.000Z',
     });
-    assert.equal(progress.toolCalls, undefined);
     const record = await readRun(stateDir, created.runId);
     assert.ok(record);
     assert.equal(record.progressCount, 0);

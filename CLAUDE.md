@@ -535,12 +535,19 @@ silently breaks on CLI upgrades.
 
 ```bash
 npm install
-npm run build        # tsc -> dist/
+npm run build        # tsc -> dist/ (tsconfig.build.json, which EXCLUDES tests)
+npm run typecheck    # tsc --noEmit over tsconfig.json, which INCLUDES tests
 npm run dev          # tsx src/index.ts
 npm test             # node --test against dist/ (or tsx loader)
 npm run lint
 npm run format
 ```
+
+**`npm run typecheck` is not optional before a release.** `npm test` runs the tests through tsx,
+which transpiles without typechecking, and `npm run build` compiles `tsconfig.build.json`, which
+excludes tests. So build, lint and test can all be clean while a test file does not typecheck, and
+the first thing to notice is the release workflow failing after the tag is already pushed. That is
+how v0.2.5's first tag died.
 
 Manual end-to-end check against a real CLI:
 
