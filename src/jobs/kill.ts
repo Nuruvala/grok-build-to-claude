@@ -7,6 +7,7 @@
  * appenders and let `execGrok` reap its child; SIGKILL only if that fails.
  */
 
+import { readdirSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const STOP_GRACE_MS = 3000;
@@ -18,22 +19,83 @@ export interface KillOutcome {
   readonly reason: 'gone' | 'terminated' | 'killed' | 'survived' | 'no-pid' | 'not-permitted';
 }
 
+/** Linux `/proc/<pid>/stat` fields this module actually uses. */
+export interface ProcPidStat {
+  readonly state: string;
+  readonly pgrp: number;
+}
+
 /**
- * ESRCH: really gone. EPERM: alive but owned by another user — alive is the
+ * Whether a process group still has anyone who can run.
+ *
+ * `unreadable` is "we looked and found nobody", which is not the same as
+ * "everyone we found is a zombie". Declaring a live run dead is the worse
+ * error, so the caller treats unreadable as alive unless a later `kill(-pid, 0)`
+ * says the group is gone.
+ */
+export type GroupVerdict = 'live' | 'zombies-only' | 'unreadable';
+
+/**
+ * Parse `/proc/<pid>/stat`. Field 2 is the executable name in parentheses and
+ * may itself contain spaces and parentheses, so the split is on the last `)`,
+ * not on whitespace. Field 3 is the state character; field 5 is the pgid.
+ */
+export function parseProcPidStat(contents: string): ProcPidStat | null {
+  const close = contents.lastIndexOf(')');
+  if (close === -1) return null;
+  const rest = contents.slice(close + 1).trim();
+  if (rest === '') return null;
+  const fields = rest.split(/\s+/);
+  const stateToken = fields[0];
+  const pgrpToken = fields[2];
+  if (stateToken === undefined || stateToken === '') return null;
+  if (pgrpToken === undefined) return null;
+  const pgrp = Number.parseInt(pgrpToken, 10);
+  if (!Number.isInteger(pgrp)) return null;
+  return Object.freeze({ state: stateToken.charAt(0), pgrp });
+}
+
+/**
+ * Fold already-parsed `/proc/<pid>/stat` rows for one process group. Pure so
+ * the zombie/live/empty cases do not need a real process table.
+ */
+export function groupVerdictFromMembers(
+  pgid: number,
+  members: readonly ProcPidStat[],
+): GroupVerdict {
+  let sawMember = false;
+  for (const member of members) {
+    if (member.pgrp !== pgid) continue;
+    sawMember = true;
+    if (member.state !== 'Z') return 'live';
+  }
+  return sawMember ? 'zombies-only' : 'unreadable';
+}
+
+/**
+ * ESRCH: really gone. EPERM: alive but owned by another user, so alive is the
  * safe reading, because declaring a live run dead is the worse error of the
- * two.
+ * two. A zombie owned by another user is still a zombie: `kill(pid, 0)`
+ * succeeds against one, so Linux liveness also reads `/proc/<pid>/stat` and
+ * treats state `Z` as dead.
  *
  * Caveat: pids are recycled, so a long-dead run can look alive. That
  * direction is merely stale, and the next status call after the recycled
  * pid exits corrects it.
+ *
+ * Non-Linux platforms have no `/proc`. We keep today's `kill(pid, 0)`
+ * behaviour there rather than shelling out to `ps` on the hot path.
  */
 export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error: unknown) {
-    return errorCode(error) !== 'ESRCH';
+    if (errorCode(error) === 'ESRCH') return false;
+    // EPERM and anything else: the pid exists. Fall through so a zombie we
+    // can still see in /proc is not reported as a live run we cannot stop.
   }
+  if (process.platform === 'linux' && linuxPidIsZombie(pid)) return false;
+  return true;
 }
 
 /**
@@ -43,18 +105,77 @@ export function processAlive(pid: number): boolean {
  * signalling `-pid` is wasted if we then poll the leader and call the tree
  * dead while grok keeps spending.
  *
+ * A group of nothing but zombies is empty for this purpose: a zombie cannot
+ * be signalled and never goes away on its own, which is how `stop` used to
+ * report `survived` for a tree that had already died.
+ *
  * Windows has no POSIX process groups; fall back to the single-pid check
- * and the same grandchild caveat `sendSignal` already carries.
+ * and the same grandchild caveat `sendSignal` already carries. Other
+ * non-Linux platforms have no `/proc`, so a successful `kill(-pid, 0)` still
+ * counts as alive, the same as today.
  */
 export function processGroupAlive(pid: number): boolean {
   if (process.platform === 'win32') {
     return processAlive(pid);
   }
+  if (!processGroupExists(pid)) return false;
+  if (process.platform !== 'linux') return true;
+  const verdict = linuxGroupVerdict(pid);
+  if (verdict === 'live') return true;
+  if (verdict === 'zombies-only') return false;
+  // Found no members. The group existed a moment ago: if it is gone now the
+  // tree exited during the scan; if it is still signalable we could not see
+  // its members (hidepid, a tight race) and alive is the safe reading.
+  return processGroupExists(pid);
+}
+
+function processGroupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
     return true;
   } catch (error: unknown) {
     return errorCode(error) !== 'ESRCH';
+  }
+}
+
+function linuxPidIsZombie(pid: number): boolean {
+  const stat = readProcPidStat(pid);
+  return stat !== null && stat.state === 'Z';
+}
+
+function linuxGroupVerdict(pgid: number): GroupVerdict {
+  return groupVerdictFromMembers(pgid, readProcPidStats());
+}
+
+function readProcPidStats(): readonly ProcPidStat[] {
+  const stats: ProcPidStat[] = [];
+  for (const pid of listProcPids()) {
+    const stat = readProcPidStat(pid);
+    if (stat !== null) stats.push(stat);
+  }
+  return stats;
+}
+
+function listProcPids(): readonly number[] {
+  try {
+    const names = readdirSync('/proc');
+    const pids: number[] = [];
+    for (const name of names) {
+      if (!/^\d+$/.test(name)) continue;
+      const pid = Number.parseInt(name, 10);
+      if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+    }
+    return pids;
+  } catch {
+    return [];
+  }
+}
+
+function readProcPidStat(pid: number): ProcPidStat | null {
+  try {
+    return parseProcPidStat(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+  } catch {
+    return null;
   }
 }
 

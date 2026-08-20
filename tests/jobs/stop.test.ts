@@ -669,6 +669,10 @@ describe('worker writes progress.json, not record.json', () => {
     const progress = await readProgress(stateDir, created.runId);
     assert.ok(progress);
     assert.ok(progress.progressCount > 0);
+    assert.ok(progress.toolCalls);
+    assert.equal(progress.toolCalls.total, 1);
+    assert.equal(progress.toolCalls.byLabel['list_dir'], 1);
+    assert.ok(progress.toolCalls.lastCallAt);
   });
 });
 

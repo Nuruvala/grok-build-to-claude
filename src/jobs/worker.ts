@@ -133,6 +133,9 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
   let progressCount = 0;
   let lastProgress: string | null = null;
   let lastProgressAt: string | null = null;
+  let toolCallTotal = 0;
+  let toolCallsByLabel: Readonly<Record<string, number>> = Object.freeze({});
+  let lastToolCallAt: string | null = null;
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let writeChain = Promise.resolve();
 
@@ -146,7 +149,16 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
   }
 
   function enqueueProgress(): void {
-    const snapshot = { progressCount, lastProgress, lastProgressAt };
+    const snapshot = {
+      progressCount,
+      lastProgress,
+      lastProgressAt,
+      toolCalls: {
+        total: toolCallTotal,
+        byLabel: toolCallsByLabel,
+        lastCallAt: lastToolCallAt,
+      },
+    };
     writeChain = writeChain
       .then(() => writeProgress(stateDir, runId, snapshot))
       .then(() => undefined)
@@ -166,6 +178,13 @@ async function runExecute(options: RunJobOptions): Promise<RunState> {
     progressCount += 1;
     lastProgress = line;
     lastProgressAt = new Date().toISOString();
+    if (update.toolTally !== undefined) {
+      if (update.toolTally.total > toolCallTotal) {
+        lastToolCallAt = lastProgressAt;
+      }
+      toolCallTotal = update.toolTally.total;
+      toolCallsByLabel = Object.freeze({ ...update.toolTally.byLabel });
+    }
     flushTimer ??= setTimeout(flushProgress, RECORD_PROGRESS_FLUSH_MS);
   }
 

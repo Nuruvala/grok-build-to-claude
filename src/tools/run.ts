@@ -348,7 +348,11 @@ function startStreamSession(
 
   function emit(emission: ProgressEmission | null): void {
     if (emission === null) return;
-    reportProgress({ progress: emission.progress, message: emission.message });
+    reportProgress({
+      progress: emission.progress,
+      message: emission.message,
+      toolTally: emission.toolTally,
+    });
   }
 
   function cancelDebounce(): void {

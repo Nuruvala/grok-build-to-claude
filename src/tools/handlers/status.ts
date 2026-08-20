@@ -19,6 +19,7 @@ import {
   isTerminal,
   mergeProgress,
   RunIdSchema,
+  type RunProgress,
   type RunRecord,
   type StoredResult,
 } from '../../jobs/record.js';
@@ -108,11 +109,14 @@ async function listMode(limit: number, ctx: ToolContext): Promise<ToolResult> {
   const records = await Promise.all(
     listed.records.map(async (record) => {
       const progress = await readProgress(ctx.config.stateDir, record.runId);
-      return displayRecord(
-        mergeProgress(record, progress),
-        nowMs,
-        orphanErrorText(ctx.config.stateDir, record.runId),
-      );
+      return {
+        record: displayRecord(
+          mergeProgress(record, progress),
+          nowMs,
+          orphanErrorText(ctx.config.stateDir, record.runId),
+        ),
+        progress,
+      };
     }),
   );
 
@@ -147,14 +151,14 @@ async function listMode(limit: number, ctx: ToolContext): Promise<ToolResult> {
     lines.push(`Partial listing from ${ctx.config.stateDir}: ${bits.join('; ')}.`);
   }
   lines.push('');
-  for (const record of records) {
-    lines.push(formatRunLine(record, nowMs));
+  for (const displayed of records) {
+    lines.push(formatRunLine(displayed.record, nowMs));
   }
 
   return statusResult({
     text: lines.join('\n'),
     meta: {
-      runs: records.map(runMeta),
+      runs: records.map((displayed) => runMeta(displayed.record, displayed.progress)),
       count: records.length,
       scanned: listed.scanned,
       unreadable: listed.unreadable,
@@ -177,9 +181,9 @@ async function singleMode(input: StatusInput, ctx: ToolContext): Promise<ToolRes
   let lastProgressCount = -1;
 
   const deadline = Date.now() + waitMs;
-  let record = await loadForDisplay(ctx.config.stateDir, runId);
+  let displayed = await loadForDisplay(ctx.config.stateDir, runId);
 
-  if (record === null) {
+  if (displayed === null) {
     return statusResult({
       text:
         `No background run with id "${runId}" was found in ${ctx.config.stateDir}.\n\n` +
@@ -194,12 +198,15 @@ async function singleMode(input: StatusInput, ctx: ToolContext): Promise<ToolRes
     });
   }
 
-  while (!isTerminal(record.state) && Date.now() < deadline && !ctx.signal.aborted) {
-    if (record.progressCount > lastProgressCount && record.lastProgress !== null) {
-      lastProgressCount = record.progressCount;
+  while (!isTerminal(displayed.record.state) && Date.now() < deadline && !ctx.signal.aborted) {
+    if (
+      displayed.record.progressCount > lastProgressCount &&
+      displayed.record.lastProgress !== null
+    ) {
+      lastProgressCount = displayed.record.progressCount;
       ctx.reportProgress({
-        progress: record.progressCount,
-        message: record.lastProgress,
+        progress: displayed.record.progressCount,
+        message: displayed.record.lastProgress,
       });
     }
     try {
@@ -210,25 +217,31 @@ async function singleMode(input: StatusInput, ctx: ToolContext): Promise<ToolRes
     }
     const next = await loadForDisplay(ctx.config.stateDir, runId);
     if (next === null) break;
-    record = next;
+    displayed = next;
   }
 
-  if (isTerminal(record.state)) {
-    return await terminalResult(record, ctx);
+  if (isTerminal(displayed.record.state)) {
+    return await terminalResult(displayed.record, ctx);
   }
 
-  return liveResult(record, ctx, tailBytes);
+  return liveResult(displayed.record, displayed.progress, ctx, tailBytes);
 }
 
-async function loadForDisplay(stateDir: string, runId: string): Promise<RunRecord | null> {
+async function loadForDisplay(
+  stateDir: string,
+  runId: string,
+): Promise<{ record: RunRecord; progress: RunProgress | null } | null> {
   const record = await readRun(stateDir, runId);
   if (record === null) return null;
   const progress = await readProgress(stateDir, runId);
-  return displayRecord(
-    mergeProgress(record, progress),
-    Date.now(),
-    orphanErrorText(stateDir, runId),
-  );
+  return {
+    record: displayRecord(
+      mergeProgress(record, progress),
+      Date.now(),
+      orphanErrorText(stateDir, runId),
+    ),
+    progress,
+  };
 }
 
 function orphanErrorText(stateDir: string, runId: string): string {
@@ -385,10 +398,11 @@ function resultlessLead(record: RunRecord): string {
 
 async function liveResult(
   record: RunRecord,
+  progress: RunProgress | null,
   ctx: ToolContext,
   tailBytes: number,
 ): Promise<ToolResult> {
-  const header = formatRunDetail(record, Date.now());
+  const header = formatRunDetail(record, Date.now(), progress);
   const progressPath = path.join(runDir(ctx.config.stateDir, record.runId), 'progress.log');
   let tail = '';
   let tailTruncated = false;
@@ -404,7 +418,7 @@ async function liveResult(
   return statusResult({
     text: parts.join('\n'),
     meta: {
-      ...runMeta(record),
+      ...runMeta(record, progress),
       found: true,
       tailTruncated,
     },
@@ -413,8 +427,8 @@ async function liveResult(
   });
 }
 
-function runMeta(record: RunRecord): Record<string, unknown> {
-  return {
+function runMeta(record: RunRecord, progress?: RunProgress | null): Record<string, unknown> {
+  const meta: Record<string, unknown> = {
     runId: record.runId,
     state: record.state,
     tool: record.tool,
@@ -432,6 +446,12 @@ function runMeta(record: RunRecord): Record<string, unknown> {
     summary: record.summary,
     elapsedMs: elapsedMs(record, Date.now()),
   };
+  if (progress?.toolCalls !== undefined) {
+    meta['toolCalls'] = progress.toolCalls.total;
+    meta['toolCallsByLabel'] = progress.toolCalls.byLabel;
+    meta['lastToolCallAt'] = progress.toolCalls.lastCallAt;
+  }
+  return meta;
 }
 
 function statusResult(payload: {

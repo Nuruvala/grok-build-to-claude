@@ -250,6 +250,44 @@ describe('parseRunProgress', () => {
     assert.equal(parsedProgress.progressCount, 1);
     assert.equal(parsedProgress.lastProgress, '#1');
   });
+
+  it('reads a sidecar written before toolCalls existed rather than crashing on it', () => {
+    const parsedProgress = parseRunProgress({
+      progressCount: 12,
+      lastProgress: '#12 thinking: (file written)',
+      lastProgressAt: ISO,
+    });
+    assert.ok(parsedProgress);
+    assert.equal(parsedProgress.progressCount, 12);
+    assert.equal(parsedProgress.toolCalls, undefined);
+  });
+
+  it('parses a tool-call tally and ignores a malformed one so an old or partial sidecar still displays', () => {
+    const parsedProgress = parseRunProgress({
+      progressCount: 4,
+      lastProgress: '#4 grep src',
+      lastProgressAt: ISO,
+      toolCalls: {
+        total: 3,
+        byLabel: { read_file: 2, grep: 1, bogus: 'nope' },
+        lastCallAt: ISO,
+      },
+    });
+    assert.ok(parsedProgress);
+    assert.deepEqual(parsedProgress.toolCalls, {
+      total: 3,
+      byLabel: { read_file: 2, grep: 1 },
+      lastCallAt: ISO,
+    });
+    const malformed = parseRunProgress({
+      progressCount: 1,
+      lastProgress: '#1',
+      lastProgressAt: ISO,
+      toolCalls: 'nope',
+    });
+    assert.ok(malformed);
+    assert.equal(malformed.toolCalls, undefined);
+  });
 });
 
 describe('timestampFromRunId', () => {

@@ -31,6 +31,14 @@ export interface ProgressUpdate {
   progress: number;
   total?: number;
   message?: string;
+  /**
+   * Snapshot of tool_call events so far. Background workers copy this into
+   * the progress sidecar; the MCP progress notification ignores it.
+   */
+  toolTally?: {
+    readonly total: number;
+    readonly byLabel: Readonly<Record<string, number>>;
+  };
 }
 
 /**

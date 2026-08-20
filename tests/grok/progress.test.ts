@@ -425,6 +425,35 @@ describe('createProgressMapper other events', () => {
     assert.equal(mapper.accept({ type: 'unparseable', line: '{' }), null);
   });
 
+  it('counts each tool_call by label and leaves the tally unchanged for updates, thoughts, and text', () => {
+    const mapper = createProgressMapper();
+    const first = mapper.accept(toolCall({ title: 'read_file', locations: ['a.ts'] }));
+    const second = mapper.accept(toolCall({ title: 'grep', locations: ['src'] }));
+    const third = mapper.accept(toolCall({ title: 'read_file', locations: ['b.ts'] }));
+    assert.deepEqual(first?.toolTally, { total: 1, byLabel: { read_file: 1 } });
+    assert.deepEqual(second?.toolTally, { total: 2, byLabel: { read_file: 1, grep: 1 } });
+    assert.deepEqual(third?.toolTally, { total: 3, byLabel: { read_file: 2, grep: 1 } });
+
+    assert.equal(
+      mapper.accept({
+        type: 'tool_call_update',
+        toolCallId: 'x',
+        status: 'completed',
+        rawOutput: null,
+        locations: [],
+      })?.toolTally.total,
+      3,
+    );
+    mapper.accept({ type: 'thought', data: '(file written)' });
+    assert.deepEqual(mapper.flush()?.toolTally, { total: 3, byLabel: { read_file: 2, grep: 1 } });
+  });
+
+  it('starts at zero so a run that has only thought is visible as having invoked nothing', () => {
+    const mapper = createProgressMapper();
+    mapper.accept({ type: 'thought', data: '(file written) ARRANGEMENT REFUTED' });
+    assert.deepEqual(mapper.flush()?.toolTally, { total: 0, byLabel: {} });
+  });
+
   it('ignores an unmodelled event without throwing, because a missing progress line is cosmetic where an exception in a stdout handler is fatal', () => {
     const mapper = createProgressMapper();
     const event = { type: 'brand-new' } as unknown as GrokStreamEvent;

@@ -66,11 +66,21 @@ export type RunPatch = {
 /**
  * Sidecar written only by the worker. Kept off `record.json` so a `stop` from
  * the server cannot lose a terminal write to a progress rename.
+ *
+ * `toolCalls` is optional so a sidecar written before this field existed still
+ * parses. A missing tally is not a zero: we did not count.
  */
+export interface ToolCallTally {
+  readonly total: number;
+  readonly byLabel: Readonly<Record<string, number>>;
+  readonly lastCallAt: string | null;
+}
+
 export interface RunProgress {
   readonly progressCount: number;
   readonly lastProgress: string | null;
   readonly lastProgressAt: string | null;
+  readonly toolCalls?: ToolCallTally | undefined;
 }
 
 export function isTerminal(state: RunState): boolean {
@@ -217,11 +227,35 @@ export function parseRunProgress(value: unknown): RunProgress | null {
   // present-but-broken one must be null too — defaulting a missing count
   // to 0 would overlay a fake zero onto display through mergeProgress.
   if (progressCount === null) return null;
+  const toolCalls = parseToolCallTally(value['toolCalls']);
   return Object.freeze({
     progressCount,
     lastProgress: stringField(value, 'lastProgress'),
     lastProgressAt: stringField(value, 'lastProgressAt'),
+    ...(toolCalls !== undefined ? { toolCalls } : {}),
   });
+}
+
+function parseToolCallTally(value: unknown): ToolCallTally | undefined {
+  if (!isRecord(value)) return undefined;
+  const total = numberField(value, 'total');
+  if (total === null || !Number.isInteger(total) || total < 0) return undefined;
+  return Object.freeze({
+    total,
+    byLabel: parseCountMap(value['byLabel']),
+    lastCallAt: stringField(value, 'lastCallAt'),
+  });
+}
+
+function parseCountMap(value: unknown): Readonly<Record<string, number>> {
+  if (!isRecord(value)) return Object.freeze({});
+  const counts: Record<string, number> = {};
+  for (const [label, count] of Object.entries(value)) {
+    if (typeof count === 'number' && Number.isInteger(count) && count >= 0) {
+      counts[label] = count;
+    }
+  }
+  return Object.freeze(counts);
 }
 
 /** Pure merge. `undefined` values are ignored so omission never blanks a field. */

@@ -12,21 +12,25 @@ implementation slices to Grok Build and the results are verified at source.
 | # | Issue | Severity | Fixed in |
 |---|---|---|---|
 | 1 | README documented `-s user` for `claude mcp add`, which is not the flag | minor | 0.2.3 |
+| 3 | `status` exposes no progress fraction to poll | minor | 0.2.5 (subsumed by #9: a tool-call tally that has not moved is the stuck/working signal) |
 | 4 | A refused tool call ended the whole run with `stopReason: cancelled` and no indication of which call caused it | severe | 0.2.3 |
 | 5 | `permission: "write"` could not write at all | severe | 0.2.4 |
+| 9 | A run can loop asserting `(file written)` in its reasoning without ever calling a write tool | medium | 0.2.5 |
+| 10 | `stop` counts a zombie as a running process, so it reports a false failure | moderate | 0.2.5 |
 
 ## Open
 
 | # | Issue | Severity | Notes |
 |---|---|---|---|
 | 2 | The progress stream repeats identical reasoning fragments | minor | See #9, which is the same symptom at a much worse amplitude |
-| 3 | `status` exposes no progress fraction to poll | minor | A caller cannot distinguish "thinking hard" from "stuck" |
 | 6 | The cut-off note attributes every refusal to a sandbox or a write outside `cwd` | minor | Accurate for the case that produced it; too narrow in general |
 | 7 | Two spawn-timing tests flake under load | minor | |
 | 8 | A long run's output is lost when the model writes to a path outside `cwd` | minor | Recovery from `~/.local/state/grok-mcp/runs/<runId>/stdout.log` works and is manual |
-| 9 | A run can loop asserting `(file written)` in its reasoning without ever calling a write tool | **medium** | Detail below |
 
 ### 9. Phantom writes, and why the caller cannot see them
+
+Fixed in 0.2.5: `status` now surfaces a per-run tool-call tally (total, by label, last call time)
+from the progress sidecar.
 
 Observed on run `mt0g24dy-f624eba1`, a 16m49s design review. From roughly minute 3 the progress
 stream repeated a near-identical fragment about twelve times:
@@ -57,6 +61,9 @@ Workaround in use: check the filesystem rather than the model's claim, which is 
 driving project applies to every delegate claim.
 
 ### 10. `stop` counts a zombie as a running process, so it reports a false failure
+
+Fixed in 0.2.5: liveness treats process state `Z` as dead, including a process group of nothing
+but zombies. `status` uses the same check.
 
 Observed on run `mt0r75xk-de9b06c1`. The run was making no progress and was stopped:
 

@@ -258,11 +258,19 @@ export async function writeProgress(
   runId: string,
   progress: RunProgress,
 ): Promise<void> {
-  await writeJsonAtomic(path.join(runDir(stateDir, runId), PROGRESS_FILE), {
+  const body: Record<string, unknown> = {
     progressCount: progress.progressCount,
     lastProgress: progress.lastProgress,
     lastProgressAt: progress.lastProgressAt,
-  });
+  };
+  if (progress.toolCalls !== undefined) {
+    body['toolCalls'] = {
+      total: progress.toolCalls.total,
+      byLabel: progress.toolCalls.byLabel,
+      lastCallAt: progress.toolCalls.lastCallAt,
+    };
+  }
+  await writeJsonAtomic(path.join(runDir(stateDir, runId), PROGRESS_FILE), body);
 }
 
 export async function readProgress(stateDir: string, runId: string): Promise<RunProgress | null> {

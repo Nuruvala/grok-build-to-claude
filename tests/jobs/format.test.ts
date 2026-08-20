@@ -8,6 +8,7 @@ import {
   formatRunHeader,
   formatRunLine,
   formatTimestamp,
+  formatToolCallLine,
 } from '../../src/jobs/format.js';
 import { RECORD_SCHEMA_VERSION, type RunRecord } from '../../src/jobs/record.js';
 
@@ -87,6 +88,44 @@ describe('formatRunLine / formatRunHeader / formatRunDetail', () => {
     assert.equal(elapsedMs(record({ endedAt: '2026-08-17T12:00:45.000Z' }), now), 45_000);
   });
 
+  it('renders a tool-call tally on a live detail and omits it when the sidecar predates the field', () => {
+    const live = formatRunDetail(
+      record(),
+      now,
+      {
+        progressCount: 3,
+        lastProgress: '#3 thinking: (file written)',
+        lastProgressAt: '2026-08-17T12:00:10.000Z',
+        toolCalls: {
+          total: 3,
+          byLabel: { read_file: 2, grep: 1 },
+          lastCallAt: '2026-08-17T12:00:08.000Z',
+        },
+      },
+    );
+    assert.match(live, /tools:\s+3 {2}grep 1, read_file 2 {2}\(last 52s ago\)/);
+
+    const none = formatRunDetail(
+      record(),
+      now,
+      {
+        progressCount: 12,
+        lastProgress: '#12 thinking: (file written)',
+        lastProgressAt: '2026-08-17T12:00:10.000Z',
+        toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
+      },
+    );
+    assert.match(none, /tools:\s+0$/m);
+    assert.doesNotMatch(none, /last 52s ago/);
+
+    const oldSidecar = formatRunDetail(record(), now, {
+      progressCount: 1,
+      lastProgress: '#1 list_dir .',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+    });
+    assert.doesNotMatch(oldSidecar, /tools:/);
+  });
+
   it('renders a completed-but-cut-off run as completed (cut off: cancelled)', () => {
     const cut = record({
       state: 'completed',
@@ -98,5 +137,28 @@ describe('formatRunLine / formatRunHeader / formatRunDetail', () => {
       'mfk2p1x9-3ac71f0b  completed (cut off: cancelled)  grok  45s  do a thing',
     );
     assert.match(formatRunDetail(cut, now), /completed \(cut off: cancelled\)/);
+  });
+});
+
+describe('formatToolCallLine', () => {
+  const now = Date.parse('2026-08-17T12:01:00.000Z');
+
+  it('returns null for a missing tally, 0 for an empty one, and a sorted breakdown when tools ran', () => {
+    assert.equal(formatToolCallLine(undefined, now), null);
+    assert.equal(
+      formatToolCallLine({ total: 0, byLabel: {}, lastCallAt: null }, now),
+      '0',
+    );
+    assert.equal(
+      formatToolCallLine(
+        {
+          total: 3,
+          byLabel: { read_file: 2, grep: 1 },
+          lastCallAt: '2026-08-17T12:00:08.000Z',
+        },
+        now,
+      ),
+      '3  grep 1, read_file 2  (last 52s ago)',
+    );
   });
 });

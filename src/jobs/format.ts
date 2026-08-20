@@ -6,7 +6,13 @@
  * stamp would make the same run look different in two places.
  */
 
-import { isCutOff, isTerminal, type RunRecord } from './record.js';
+import {
+  isCutOff,
+  isTerminal,
+  type RunProgress,
+  type RunRecord,
+  type ToolCallTally,
+} from './record.js';
 
 /** `completed (cut off: cancelled)` so a fragment is not listed as a clean finish. */
 export function formatRunState(record: RunRecord): string {
@@ -38,7 +44,11 @@ export function formatRunLine(record: RunRecord, nowMs: number): string {
   return [record.runId, formatRunState(record), record.tool, elapsed, record.summary].join('  ');
 }
 
-export function formatRunDetail(record: RunRecord, nowMs: number): string {
+export function formatRunDetail(
+  record: RunRecord,
+  nowMs: number,
+  progress?: RunProgress | null,
+): string {
   const elapsed = formatElapsed(elapsedMs(record, nowMs));
   const lines = [
     `run ${record.runId}  ${formatRunState(record)}  ${record.tool}  ${elapsed}`,
@@ -50,6 +60,10 @@ export function formatRunDetail(record: RunRecord, nowMs: number): string {
   ];
   if (!isTerminal(record.state)) {
     lines.push(`  last:         ${formatLastProgress(record, nowMs)}`);
+    const toolsLine = formatToolCallLine(progress?.toolCalls, nowMs);
+    if (toolsLine !== null) {
+      lines.push(`  tools:        ${toolsLine}`);
+    }
   }
   if (record.error !== null && record.error !== '') {
     lines.push(`  error:        ${record.error}`);
@@ -87,6 +101,34 @@ function formatLastProgress(record: RunRecord, nowMs: number): string {
   const at = Date.parse(record.lastProgressAt);
   if (!Number.isFinite(at)) return record.lastProgress;
   return `${record.lastProgress}  (${formatElapsed(Math.max(0, nowMs - at))} ago)`;
+}
+
+/**
+ * One line for a live run. `null` when the sidecar predates the tally, so a
+ * missing count is not rendered as zero tools.
+ */
+export function formatToolCallLine(
+  tally: ToolCallTally | undefined,
+  nowMs: number,
+): string | null {
+  if (tally === undefined) return null;
+  if (tally.total === 0) return '0';
+  const labels = Object.keys(tally.byLabel).sort();
+  const parts: string[] = [];
+  for (const label of labels) {
+    const count = tally.byLabel[label];
+    if (count === undefined || count === 0) continue;
+    parts.push(`${label} ${count}`);
+  }
+  const breakdown = parts.length > 0 ? `  ${parts.join(', ')}` : '';
+  return `${tally.total}${breakdown}${formatLastToolCallAgo(tally.lastCallAt, nowMs)}`;
+}
+
+function formatLastToolCallAgo(iso: string | null, nowMs: number): string {
+  if (iso === null) return '';
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  return `  (last ${formatElapsed(Math.max(0, nowMs - at))} ago)`;
 }
 
 function formatPid(pid: number | null): string {

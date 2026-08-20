@@ -345,10 +345,32 @@ describe('progress.json', () => {
       lastProgress: '#4 list_dir .',
       lastProgressAt: '2026-08-17T12:00:10.000Z',
     });
+    assert.equal(progress.toolCalls, undefined);
     const record = await readRun(stateDir, created.runId);
     assert.ok(record);
     assert.equal(record.progressCount, 0);
     assert.equal(record.lastProgress, null);
+  });
+
+  it('round-trips a tool-call tally and still reads a sidecar that omits it', async () => {
+    const stateDir = await makeState();
+    const created = await seed(stateDir, 'prg00003-51deca00');
+    await writeProgress(stateDir, created.runId, {
+      progressCount: 4,
+      lastProgress: '#4 grep src',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+      toolCalls: {
+        total: 3,
+        byLabel: { read_file: 2, grep: 1 },
+        lastCallAt: '2026-08-17T12:00:08.000Z',
+      },
+    });
+    const progress = await readProgress(stateDir, created.runId);
+    assert.deepEqual(progress?.toolCalls, {
+      total: 3,
+      byLabel: { read_file: 2, grep: 1 },
+      lastCallAt: '2026-08-17T12:00:08.000Z',
+    });
   });
 
   it('returns null when the sidecar is missing or unparseable', async () => {

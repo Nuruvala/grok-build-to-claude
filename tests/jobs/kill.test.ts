@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,7 +8,15 @@ import { afterEach, describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { processAlive, processGroupAlive, terminateRun } from '../../src/jobs/kill.js';
+import {
+  groupVerdictFromMembers,
+  parseProcPidStat,
+  processAlive,
+  processGroupAlive,
+  terminateRun,
+} from '../../src/jobs/kill.js';
+import { isOrphan } from '../../src/jobs/liveness.js';
+import { parseRunRecord, RECORD_SCHEMA_VERSION } from '../../src/jobs/record.js';
 
 const FAKE_GROK = fileURLToPath(new URL('../fixtures/fake-grok.mjs', import.meta.url));
 
@@ -46,18 +55,11 @@ afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-function isEsrch(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH';
-}
-
 function assertDead(pid: number): void {
+  // A zombie is dead for liveness even though kill(pid, 0) still succeeds.
+  // Requiring ESRCH here is the old check, and it is what made stop report
+  // `survived` for a tree that had already exited.
   assert.equal(processAlive(pid), false);
-  assert.throws(
-    () => {
-      process.kill(pid, 0);
-    },
-    (error: unknown) => isEsrch(error),
-  );
 }
 
 async function waitForSpawn(child: ReturnType<typeof spawn>): Promise<number> {
@@ -206,6 +208,97 @@ describe('processAlive', () => {
   });
 });
 
+describe('parseProcPidStat', () => {
+  it('reads state and pgid after the last closing paren, so a comm with spaces or parentheses still parses', () => {
+    const cases: readonly {
+      readonly label: string;
+      readonly contents: string;
+      readonly state: string;
+      readonly pgrp: number;
+    }[] = [
+      {
+        label: 'ordinary comm',
+        contents: '1234 (bash) S 1 1234 1234 0 0 0 0 0 0 0 0',
+        state: 'S',
+        pgrp: 1234,
+      },
+      {
+        label: 'comm with spaces',
+        contents: '99 (my process) R 1 42 7 0',
+        state: 'R',
+        pgrp: 42,
+      },
+      {
+        label: 'comm with nested parentheses',
+        contents: '2535242 (grok (1.0.4) linu) Z 1460 2535205 0 0',
+        state: 'Z',
+        pgrp: 2535205,
+      },
+      {
+        label: 'the observed zombie, truncated to the fields we read',
+        contents: '2535242 (grok-1.0.4-linu) Z 1460 2535205 2535205 0 0 0 0 0 0 0',
+        state: 'Z',
+        pgrp: 2535205,
+      },
+    ];
+    for (const { label, contents, state, pgrp } of cases) {
+      assert.deepEqual(parseProcPidStat(contents), { state, pgrp }, label);
+    }
+  });
+
+  it('returns null for a line that is missing the comm close, the state, or the pgid', () => {
+    assert.equal(parseProcPidStat(''), null);
+    assert.equal(parseProcPidStat('1234 bash S 1 1234'), null);
+    assert.equal(parseProcPidStat('1234 (bash)'), null);
+    assert.equal(parseProcPidStat('1234 (bash) Z 1'), null);
+    assert.equal(parseProcPidStat('1234 (bash) Z 1 not-a-pgid'), null);
+  });
+
+  it(
+    'parses this process from /proc/self/stat as a non-zombie',
+    { skip: process.platform !== 'linux' },
+    () => {
+      const parsed = parseProcPidStat(readFileSync('/proc/self/stat', 'utf8'));
+      assert.ok(parsed);
+      assert.notEqual(parsed.state, 'Z');
+      assert.equal(typeof parsed.pgrp, 'number');
+    },
+  );
+});
+
+describe('groupVerdictFromMembers', () => {
+  it('is live when any member of the group is not a zombie, zombies-only when every member is, and unreadable when none match', () => {
+    const pgid = 2535205;
+    assert.equal(groupVerdictFromMembers(pgid, []), 'unreadable');
+    assert.equal(
+      groupVerdictFromMembers(pgid, [{ state: 'S', pgrp: 1 }]),
+      'unreadable',
+    );
+    assert.equal(
+      groupVerdictFromMembers(pgid, [{ state: 'Z', pgrp: pgid }]),
+      'zombies-only',
+    );
+    assert.equal(
+      groupVerdictFromMembers(pgid, [
+        { state: 'Z', pgrp: pgid },
+        { state: 'Z', pgrp: pgid },
+      ]),
+      'zombies-only',
+    );
+    assert.equal(
+      groupVerdictFromMembers(pgid, [
+        { state: 'Z', pgrp: pgid },
+        { state: 'S', pgrp: pgid },
+      ]),
+      'live',
+    );
+    assert.equal(
+      groupVerdictFromMembers(pgid, [{ state: 'R', pgrp: pgid }]),
+      'live',
+    );
+  });
+});
+
 describe('processGroupAlive', () => {
   it('is true for a detached child and false after that child exits', async () => {
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
@@ -288,6 +381,182 @@ grandchild.stdout.once('data', () => {
       assert.equal(outcome.reason, 'killed');
       assert.equal(outcome.alive, false);
       assertDead(grandchildPid);
+    },
+  );
+});
+
+function python3Available(): boolean {
+  const result = spawnSync('python3', ['-c', 'import os, ctypes'], { encoding: 'utf8' });
+  return result.status === 0;
+}
+
+const linuxZombieSkip =
+  process.platform !== 'linux'
+    ? 'linux /proc only'
+    : python3Available()
+      ? false
+      : 'python3 with ctypes is required to leave an unreaped child';
+
+async function waitForStdoutLine(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<string> {
+  const stdoutStream = child.stdout;
+  assert.ok(stdoutStream);
+  let stdout = '';
+  stdoutStream.setEncoding('utf8');
+  stdoutStream.on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  const started = Date.now();
+  while (!stdout.includes('\n') && Date.now() - started < timeoutMs) {
+    await delay(20);
+  }
+  const line = stdout.split('\n')[0] ?? '';
+  assert.ok(line !== '', `stdout=${JSON.stringify(stdout)}`);
+  return line;
+}
+
+describe('zombie liveness', () => {
+  it(
+    'treats a zombie as dead even though kill(pid, 0) still succeeds',
+    { skip: linuxZombieSkip, timeout: 10_000 },
+    async () => {
+      // Node reaps its own children, so a zombie has to be someone else's
+      // child that the parent refuses to wait() for.
+      const script = `
+import os, pathlib, sys, time
+child = os.fork()
+if child == 0:
+    os._exit(0)
+for _ in range(50):
+    try:
+        text = pathlib.Path(f'/proc/{child}/stat').read_text()
+        close = text.rfind(')')
+        if close != -1 and text[close + 1:].split()[0] == 'Z':
+            break
+    except OSError:
+        pass
+    time.sleep(0.02)
+sys.stdout.write(str(child) + '\\n')
+sys.stdout.flush()
+time.sleep(60)
+`;
+      const helper = spawn('python3', ['-c', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+      const helperPid = await waitForSpawn(helper);
+      const line = await waitForStdoutLine(helper, 3000);
+      const zombiePid = Number.parseInt(line, 10);
+      assert.ok(Number.isInteger(zombiePid) && zombiePid > 0, `line=${JSON.stringify(line)}`);
+      trackPid(helperPid);
+
+      // The defect: signal 0 succeeds, so the old check never cleared.
+      assert.doesNotThrow(() => {
+        process.kill(zombiePid, 0);
+      });
+      const parsed = parseProcPidStat(readFileSync(`/proc/${zombiePid}/stat`, 'utf8'));
+      assert.ok(parsed);
+      assert.equal(parsed.state, 'Z');
+      assert.equal(processAlive(zombiePid), false);
+
+      // status uses processAlive via isOrphan, so a zombie worker must not
+      // keep the run looking live.
+      const now = new Date().toISOString();
+      const record = parseRunRecord(
+        {
+          schemaVersion: RECORD_SCHEMA_VERSION,
+          runId: 'mfk2p1x9-3ac71f0b',
+          tool: 'grok',
+          summary: 'zombie worker',
+          state: 'running',
+          cwd: '/tmp',
+          createdAt: now,
+          startedAt: now,
+          endedAt: null,
+          workerPid: zombiePid,
+          childPid: null,
+          argv: null,
+          progressCount: 0,
+          lastProgress: null,
+          lastProgressAt: null,
+          sessionId: null,
+          stopReason: null,
+          result: null,
+          error: null,
+        },
+        'fallback',
+      );
+      assert.ok(record);
+      assert.equal(isOrphan(record, Date.now()), true);
+    },
+  );
+
+  it(
+    'treats a process group of only zombies as dead, so stop does not report survived',
+    { skip: linuxZombieSkip, timeout: 15_000 },
+    async () => {
+      // Subreaper so the zombie is not reparented to init (which would reap
+      // it) when the group leader exits. The helper stays alive and does not
+      // wait(), which is the observed stop failure: worker gone, grandchild
+      // a zombie still carrying the worker's pgid.
+      const script = `
+import ctypes, os, pathlib, sys, time
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    sys.stderr.write('prctl PR_SET_CHILD_SUBREAPER failed\\n')
+    sys.exit(1)
+r, w = os.pipe()
+leader = os.fork()
+if leader == 0:
+    os.close(r)
+    os.setpgid(0, 0)
+    zombie = os.fork()
+    if zombie == 0:
+        os._exit(0)
+    os.write(w, f'{os.getpid()} {zombie}\\n'.encode())
+    os.close(w)
+    os._exit(0)
+os.close(w)
+os.waitpid(leader, 0)
+info = os.read(r, 64)
+os.close(r)
+leader_pid, zombie_pid = (int(part) for part in info.decode().split())
+for _ in range(50):
+    try:
+        text = pathlib.Path(f'/proc/{zombie_pid}/stat').read_text()
+        close = text.rfind(')')
+        if close != -1 and text[close + 1:].split()[0] == 'Z':
+            break
+    except OSError:
+        pass
+    time.sleep(0.02)
+sys.stdout.write(f'{leader_pid} {zombie_pid}\\n')
+sys.stdout.flush()
+time.sleep(60)
+`;
+      const helper = spawn('python3', ['-c', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+      const helperPid = await waitForSpawn(helper);
+      const line = await waitForStdoutLine(helper, 3000);
+      const [leaderText, zombieText] = line.split(' ');
+      const leaderPid = Number.parseInt(leaderText ?? '', 10);
+      const zombiePid = Number.parseInt(zombieText ?? '', 10);
+      assert.ok(Number.isInteger(leaderPid) && leaderPid > 0, `line=${JSON.stringify(line)}`);
+      assert.ok(Number.isInteger(zombiePid) && zombiePid > 0, `line=${JSON.stringify(line)}`);
+      trackPid(helperPid);
+
+      assert.equal(processAlive(leaderPid), false);
+      assert.doesNotThrow(() => {
+        process.kill(-leaderPid, 0);
+      });
+      const parsed = parseProcPidStat(readFileSync(`/proc/${zombiePid}/stat`, 'utf8'));
+      assert.ok(parsed);
+      assert.equal(parsed.state, 'Z');
+      assert.equal(parsed.pgrp, leaderPid);
+      assert.equal(processAlive(zombiePid), false);
+      assert.equal(processGroupAlive(leaderPid), false);
+
+      const outcome = await terminateRun(leaderPid, { graceMs: 250, pollMs: 20 });
+      assert.notEqual(outcome.reason, 'survived');
+      assert.equal(outcome.alive, false);
     },
   );
 });

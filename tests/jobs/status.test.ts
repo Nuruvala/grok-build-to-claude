@@ -6,7 +6,13 @@ import { afterEach, describe, it } from 'node:test';
 
 import { loadConfig } from '../../src/config.js';
 import { InvalidArgumentsError } from '../../src/errors.js';
-import { claimTerminal, createRun, writeLateResult, writeTerminal } from '../../src/jobs/store.js';
+import {
+  claimTerminal,
+  createRun,
+  writeLateResult,
+  writeProgress,
+  writeTerminal,
+} from '../../src/jobs/store.js';
 import { statusTool } from '../../src/tools/handlers/status.js';
 import { invokeTool } from '../../src/tools/registry.js';
 import type { ToolContext, ToolResult } from '../../src/types.js';
@@ -357,6 +363,87 @@ describe('status recovers a cancelled run session from the store', () => {
       assert.match(textOf(result), new RegExp(fromEnd));
       assert.doesNotMatch(textOf(result), new RegExp(fromStore));
     });
+  });
+});
+
+describe('status tool-call tally', () => {
+  it('shows tools: 0 on a live run whose sidecar counted nothing, so a phantom write is visible', async () => {
+    const stateDir = await makeState();
+    await createRun({
+      stateDir,
+      runId: 'mtest0020-7001ca11',
+      tool: 'grok',
+      summary: 'design review',
+      cwd: '/tmp',
+      input: { prompt: 'review' },
+    });
+    await writeProgress(stateDir, 'mtest0020-7001ca11', {
+      progressCount: 12,
+      lastProgress: '#12 thinking: (file written) ARRANGEMENT REFUTED',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+      toolCalls: { total: 0, byLabel: {}, lastCallAt: null },
+    });
+
+    const result = await statusTool.handler({ runId: 'mtest0020-7001ca11', tail: 0 }, ctxFor(stateDir));
+    assert.match(textOf(result), /tools:\s+0/);
+    assert.equal(metaOf(result)['toolCalls'], 0);
+    assert.deepEqual(metaOf(result)['toolCallsByLabel'], {});
+    assert.equal(metaOf(result)['lastToolCallAt'], null);
+  });
+
+  it('shows a per-tool breakdown and when the last call happened', async () => {
+    const stateDir = await makeState();
+    await createRun({
+      stateDir,
+      runId: 'mtest0021-7ea0c011',
+      tool: 'grok',
+      summary: 'design review',
+      cwd: '/tmp',
+      input: { prompt: 'review' },
+    });
+    await writeProgress(stateDir, 'mtest0021-7ea0c011', {
+      progressCount: 217,
+      lastProgress: '#217 thinking: 000000 Test 12: 0.',
+      lastProgressAt: new Date().toISOString(),
+      toolCalls: {
+        total: 3,
+        byLabel: { read_file: 1, grep: 1, list_dir: 1 },
+        lastCallAt: new Date(Date.now() - 90_000).toISOString(),
+      },
+    });
+
+    const result = await statusTool.handler({ runId: 'mtest0021-7ea0c011', tail: 0 }, ctxFor(stateDir));
+    assert.match(
+      textOf(result),
+      /tools:\s+3 {2}grep 1, list_dir 1, read_file 1 {2}\(last 1m \d{2}s ago\)/,
+    );
+    assert.equal(metaOf(result)['toolCalls'], 3);
+    assert.deepEqual(metaOf(result)['toolCallsByLabel'], {
+      read_file: 1,
+      grep: 1,
+      list_dir: 1,
+    });
+  });
+
+  it('omits the tools line when the sidecar predates the tally, rather than claiming zero', async () => {
+    const stateDir = await makeState();
+    await createRun({
+      stateDir,
+      runId: 'mtest0022-01d51de0',
+      tool: 'grok',
+      summary: 'design review',
+      cwd: '/tmp',
+      input: { prompt: 'review' },
+    });
+    await writeProgress(stateDir, 'mtest0022-01d51de0', {
+      progressCount: 4,
+      lastProgress: '#4 list_dir .',
+      lastProgressAt: '2026-08-17T12:00:10.000Z',
+    });
+
+    const result = await statusTool.handler({ runId: 'mtest0022-01d51de0', tail: 0 }, ctxFor(stateDir));
+    assert.doesNotMatch(textOf(result), /tools:/);
+    assert.equal(metaOf(result)['toolCalls'], undefined);
   });
 });
 

@@ -10,10 +10,17 @@ import type { GrokRunResult } from './result.js';
 import type { GrokStreamEvent } from './stream.js';
 import { firstLocation, firstPathLike } from './tool-target.js';
 
+export interface ToolCallCounts {
+  readonly total: number;
+  readonly byLabel: Readonly<Record<string, number>>;
+}
+
 export interface ProgressEmission {
   /** Monotonic, starting at 1. */
   readonly progress: number;
   readonly message: string;
+  /** Snapshot after this event. `tool_call` increments it; other events do not. */
+  readonly toolTally: ToolCallCounts;
 }
 
 export interface ProgressMapper {
@@ -33,11 +40,21 @@ export function createProgressMapper(): ProgressMapper {
   let progress = 0;
   let textBuffer = '';
   let thoughtBuffer = '';
+  let toolCallTotal = 0;
   const labels = new Map<string, string>();
+  const toolCallCounts = new Map<string, number>();
+
+  function snapshotTally(): ToolCallCounts {
+    const byLabel: Record<string, number> = {};
+    for (const [label, count] of toolCallCounts) {
+      byLabel[label] = count;
+    }
+    return Object.freeze({ total: toolCallTotal, byLabel: Object.freeze(byLabel) });
+  }
 
   function emit(message: string): ProgressEmission {
     progress += 1;
-    return Object.freeze({ progress, message });
+    return Object.freeze({ progress, message, toolTally: snapshotTally() });
   }
 
   return {
@@ -52,6 +69,8 @@ export function createProgressMapper(): ProgressMapper {
           if (event.toolCallId !== null) {
             labels.set(event.toolCallId, label);
           }
+          toolCallTotal += 1;
+          toolCallCounts.set(label, (toolCallCounts.get(label) ?? 0) + 1);
           const target = firstLocation(event.locations) ?? firstPathLike(event.rawInput);
           return emit(target === undefined ? label : `${label} ${target}`);
         }
