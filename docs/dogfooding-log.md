@@ -25,7 +25,9 @@ implementation slices to Grok Build and the results are verified at source.
 
 ## Open
 
-None.
+| #   | Issue                                                                                  | Severity |
+| --- | -------------------------------------------------------------------------------------- | -------- |
+| 12  | `tools` accepts ids that do not exist; the CLI drops them silently and the run narrows | minor    |
 
 ### 9. Phantom writes, and why the caller cannot see them
 
@@ -152,6 +154,85 @@ mostly near-duplicate narration. Exact equality would have missed the `filled 2 
 `filled 2 2 walls` mutation, so consecutive duplicate tokens are collapsed first. A run reading
 fifty files is excluded because those lines are tool calls, which is the same distinction the
 tool-call tally makes. The advisory is derived at read time and is never written.
+
+---
+
+## 12. A run fabricated an entire review, then claimed it had no shell, and the fix that would have shown it was already released
+
+Observed on run `mtdgm0nl-6e933c2b`, 2026-08-28, a second-party acceptance review in `stele`;
+diagnosed 2026-08-29 from the run directory and the `~/.grok/sessions` store. Two findings, one of
+them a suggestion and one an open documentation gap. The fabrication itself is model behaviour,
+recorded because it is the first instance where the phantom covered work the run had _already
+successfully done_.
+
+**The run had the shell and used it.** Dispatched at `permission: "write"`, which built
+`--permission-mode auto --sandbox workspace`. Its `events.jsonl` holds 41 `permission_requested` and
+41 `permission_resolved`, every one `"decision": "allow"`, zero denials. Five were
+`run_terminal_command`, all `"outcome": "success"`, and their `tool_result` entries open with a real
+exit line and real output:
+
+```
+exit: 0
+3f2a94e docs(decisions): the amendment bullet names the commit that landed it
+a3ed7be docs(decisions): M7 round 1 slice 1 repairs ADR-0103, and a floor that changes nothing
+```
+
+Then it stopped calling tools. The final tally was
+`read_file: 27, grep: 6, run_terminal_command: 5, list_dir: 2, todo_write: 1`, and against that it
+wrote a finished verdict with eight findings whose Exhibits cite a `dart test` run, a
+`dart run bin/stele.dart render`, and Python measurements of the rendered SVGs. None of the three
+was ever executed. Only afterwards did the reasoning stream produce the explanation:
+
+```
+#229 thinking: …ly run git commands directly, I'll simulate the analysis based on the provided context
+Since I can't actually run the render here, I'll reason based on the code.
+```
+
+That ordering is the point, and it is what distinguishes this from #9 and #10. The capability claim
+is emitted _after_ the fabrication, not before it, and it is false about a tool the run had invoked
+five times with `exit: 0`. A caller reading only the progress tail sees a plausible confession of a
+sandbox problem and reaches for `permission: "full"`, which fixes nothing and gives up the sandbox
+for free. The server is not what is wrong, and neither is the permission level: nothing was denied.
+
+**Why the caller could not see it: the server was v0.2.2.** `check` in that session reported
+`grok-build v0.2.2`. The tool-call tally that makes this mechanically detectable, #9's fix, shipped
+in **0.2.5** on 2026-08-20 (`de97967`), eight days before the run. A stdio MCP server is spawned
+once per client session and lives as long as it, so a session left open across a release keeps
+serving the version it started with while the repository and `dist/` move on. The tally was being
+written to `progress.json` the whole time; nothing rendered it into `status`.
+
+Suggestion, not a defect: `check` is the only surface that reports the running version, and it is
+the tool a caller reaches for last. `VERSION` is read from `package.json` once, at process start, by
+`src/version.ts`. Re-reading that same file during `check` and comparing costs one `stat` and one
+parse, and would have turned "why is `status` missing the tally the docs describe" into a single
+line of output. Worth doing precisely because the failure it catches is invisible: a stale server
+does not error, it silently lacks features.
+
+**Open: `tools` accepts ids that do not exist, and nothing says so.** The same session's next
+dispatch passed
+`tools: ["run_terminal_command", "read_file", "write_file", "edit_file", "list_directory", "search_files"]`.
+Probed directly against grok 1.0.13 on 2026-08-29 with a deliberately mixed list:
+
+```
+grok -p "Run the shell command 'echo TOOLPROBE_OK' …" \
+  --tools run_terminal_command,search_files,list_directory,write_file
+→ "text": "I'll run that command now and paste the exact output.TOOLPROBE_OK"
+```
+
+No error, no warning, no diagnostic. The unknown ids are dropped and the run proceeds with whatever
+was real. The built-in ids observed across these sessions are `run_terminal_command`, `read_file`,
+`list_dir`, `grep` and `todo_write`; `write_file`, `list_directory` and `search_files` are not among
+them. So that dispatch ran without `list_dir`, `grep` or `todo_write`, silently, having asked for a
+_wider_ toolset than the default.
+
+This server passes the array straight to `--tools` and validates only item length and count. Its
+schema description names exactly one id ("Shell is `run_terminal_command`, not `bash`"), which is
+half a vocabulary and reads as though the rest are guessable. Two candidate fixes, in order of cost:
+name the built-in ids in the description, so a caller composing a list is not inventing them; or
+reject unknown ids outright, which is the same "reject rather than guess" rule the `cwd` and
+session-id `.min(1)` constraints already follow, but which pins this server to a tool vocabulary the
+CLI owns and can extend without warning. The first is cheap and cannot rot into a false rejection;
+the second is stronger and needs a plan for keeping the list current.
 
 ### 2. The progress stream repeats identical reasoning fragments
 
